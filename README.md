@@ -12,9 +12,13 @@
 
 ## セットアップ (所要 10 分)
 
+> **かんたんセットアップ**: [setup.html](setup.html) を開き (ファイルの画面右上の **Download raw file** で保存 → ダブルクリック)、
+> Project とリポジトリの URL を貼り付けてボタンを押すだけで、下の手順 1 のファイルが書き換え済みで作れます。手順 2 のトークン作成・Secret 登録の画面へのリンクも出ます。
+> サーバーや GitHub Pages は不要で、入力した値はどこにも送信しません。
+
 ### 1. ワークフローのファイルを置く
 
-**既存のリポジトリに入れる場合** (Project の Issue があるリポジトリなど、どこでも可)
+**既存のリポジトリに入れる場合** (setup.html を使う場合は不要) (Project の Issue があるリポジトリなど、どこでも可)
 
 1. リポジトリの **Add file → Create new file** を開く
 2. ファイル名に `.github/workflows/insights-kit.yml` と入力

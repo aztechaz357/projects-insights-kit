@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Insights Kit セットアップ</title>
+<!--
+  Projects Insights Kit のセットアップ補助ページ。
+  このファイルをダウンロードしてダブルクリックで開くだけで使えます (サーバー・インターネット上の公開は不要)。
+  入力した値はこのページの中だけで使い、どこにも送信しません (次回のためにこのブラウザにだけ保存します)。
+-->
+<style>
+  :root {
+    --bg: #f6f8fa; --card: #ffffff; --text: #1f2328; --muted: #59636e; --border: #d1d9e0;
+    --accent: #1f883d; --accent-text: #ffffff; --link: #0969da; --warn-bg: #fff8c5; --warn-border: #d4a72c;
+    --err: #d1242f; --code-bg: #f6f8fa; --step: #0969da;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117; --card: #151b23; --text: #f0f6fc; --muted: #9198a1; --border: #3d444d;
+      --accent: #238636; --accent-text: #ffffff; --link: #4493f8; --warn-bg: #2e2a1a; --warn-border: #9e6a03;
+      --err: #f85149; --code-bg: #0d1117; --step: #4493f8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.7 -apple-system, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin: 0 0 16px; }
+  h2 { font-size: 17px; margin: 0 0 12px; display: flex; gap: 10px; align-items: center; }
+  .num { flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--step); color: #fff;
+         display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  label:first-of-type { margin-top: 0; }
+  .hint { color: var(--muted); font-size: 13px; margin: 2px 0 0; }
+  input[type=text] { width: 100%; padding: 8px 10px; font: inherit; color: var(--text); background: var(--bg);
+         border: 1px solid var(--border); border-radius: 6px; }
+  input[type=text]:focus { outline: 2px solid var(--link); outline-offset: -1px; }
+  input.bad { border-color: var(--err); }
+  .err { color: var(--err); font-size: 13px; margin: 2px 0 0; }
+  .btn { display: inline-block; padding: 9px 16px; border-radius: 6px; font: inherit; font-weight: 600; cursor: pointer;
+         border: 1px solid var(--border); background: var(--bg); color: var(--text); text-decoration: none; }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
+  .btn[aria-disabled=true] { opacity: .45; pointer-events: none; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+  ol { margin: 6px 0 0; padding-left: 22px; }
+  li { margin: 4px 0; }
+  a { color: var(--link); }
+  code { background: var(--code-bg); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; font-size: 13px; }
+  .note { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 6px; padding: 8px 12px; margin-top: 12px; font-size: 14px; }
+  details { margin-top: 12px; }
+  summary { cursor: pointer; color: var(--muted); }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto;
+        font-size: 12.5px; line-height: 1.5; margin: 8px 0 0; }
+  .ok { color: var(--accent); font-weight: 600; margin-left: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Insights Kit セットアップ</h1>
+  <p class="lead">GitHub Project にバーンダウン・バーンアップ・フィーバーチャートを後付けするための準備を、ブラウザだけで行います。
+    入力した値はこのページの中だけで使い、どこにも送信しません。</p>
+
+  <section>
+    <h2><span class="num">1</span>情報を入力する</h2>
+
+    <label for="project">GitHub Project の URL</label>
+    <input type="text" id="project" placeholder="例: https://github.com/orgs/acme/projects/5" autocomplete="off">
+    <p class="hint">Project を開いたときのアドレスです (ビューの部分 <code>/views/1</code> などは付いていても構いません)。</p>
+    <p class="err" id="project-err"></p>
+
+    <label for="repo">ワークフローを置く GitHub リポジトリ</label>
+    <input type="text" id="repo" placeholder="例: https://github.com/acme/portal または acme/portal" autocomplete="off">
+    <p class="hint">Project の Issue があるリポジトリなど、どれでも構いません。リポジトリには何も書き込みません。</p>
+    <p class="err" id="repo-err"></p>
+
+    <label for="branch">ファイルを置くブランチ</label>
+    <input type="text" id="branch" value="main" autocomplete="off">
+    <p class="hint">通常は <code>main</code>。古いリポジトリは <code>master</code> のことがあります。</p>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span>ワークフローのファイルを作る</h2>
+    <p>下のボタンを押すと GitHub の「新しいファイル」画面が、ファイル名と中身が入った状態で開きます。
+      そのまま右上の <b>Commit changes…</b> → <b>Commit changes</b> を押してください。</p>
+    <div class="actions">
+      <a class="btn primary" id="open-prefilled" target="_blank" rel="noopener" aria-disabled="true">GitHub でファイルを作る</a>
+    </div>
+    <p class="err" id="form-err"></p>
+    <div class="note" id="long-note" hidden>内容が長いため、1 クリックでの入力ができません。下の「うまくいかない場合」の方法を使ってください。</div>
+    <p class="hint">ブランチ保護がある場合は、Commit の画面で「Create a new branch…」を選んで Pull Request にし、マージしてください。</p>
+
+    <details id="fallback">
+      <summary>うまくいかない場合 (コピーして貼り付ける)</summary>
+      <ol>
+        <li><button type="button" class="btn" id="copy">中身をコピー</button><span class="ok" id="copied" hidden>コピーしました</span></li>
+        <li><a id="open-empty" target="_blank" rel="noopener">ファイル名だけ入った作成画面を開く</a> (または リポジトリの <b>Add file → Create new file</b> で
+          <code>.github/workflows/insights-kit.yml</code> と入力)</li>
+        <li>中身の欄に貼り付けて (Ctrl+V)、<b>Commit changes</b></li>
+      </ol>
+      <pre id="preview"></pre>
+    </details>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span>鍵 (Secret) を登録する</h2>
+    <p>ワークフローが Project を操作するための鍵 (GitHub の個人アクセストークン) を、リポジトリに安全に預けます
+      (登録した値は画面に表示されず、ログでも伏せられます)。</p>
+    <p id="token-how">先に手順 1 の GitHub Project の URL を入れてください。</p>
+    <div class="actions">
+      <a class="btn" id="open-secret" target="_blank" rel="noopener" aria-disabled="true">Secret の登録画面を開く</a>
+    </div>
+    <p class="hint">開いた画面で Name に <code>PROJECT_TOKEN</code>、Secret にトークンを貼り付けて <b>Add secret</b>。</p>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span>実行する</h2>
+    <ol>
+      <li><a id="open-actions" target="_blank" rel="noopener">Actions の Insights Kit</a> を開き、右側の <b>Run workflow</b></li>
+      <li><b>mode: setup</b> を選び、<b>計画完了日</b> (バッファを含まない完了予定日) などを入れて実行</li>
+      <li>実行結果の Summary に出る表のとおりに、Project の <b>Insights</b> でチャートを作る</li>
+    </ol>
+    <p class="hint">以後は平日 9:00 (日本時間) に自動更新されます。詳しくは
+      <a href="https://github.com/aztechaz357/projects-insights-kit#readme" target="_blank" rel="noopener">README</a> を見てください。</p>
+  </section>
+</main>
+
+<!-- ワークフローの雛形 (.github/workflows/insights-kit.yml と同じ内容。tests で一致を確認している) -->
+<script type="text/plain" id="workflow-template"># Projects Insights Kit  https://github.com/aztechaz357/projects-insights-kit
+# with: の project_url を対象 Project の URL に書き換えて使う (setup.html を使うと自動で入る)
+# 平日 09:00 (日本時間) に自動更新。リポジトリには何も書き込まない
+name: Insights Kit
+
+on:
+  schedule:
+    - cron: "0 0 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "daily=いますぐ更新 / setup=初回設定・設定変更"
+        type: choice
+        options: [daily, setup]
+        default: daily
+      planned_end_date:
+        description: "[setup] 計画完了日 (バッファを含まない) YYYY-MM-DD"
+      start_date:
+        description: "[setup] 開始日 YYYY-MM-DD (空=今日)"
+      buffer:
+        description: "[setup] バッファ: auto=三点見積から / 数字=営業日数"
+        default: auto
+      cadence:
+        description: "[setup] 進め方"
+        type: choice
+        options: [phase+sprint-2w, sprint-2w, sprint-1w, phase, none]
+        default: phase+sprint-2w
+      estimate_field:
+        description: "[setup] 既存の見積フィールド名 (空=新しく作る)"
+      japan_holidays:
+        description: "[setup] 日本の祝日を除外する"
+        type: boolean
+        default: true
+
+jobs:
+  kit:
+    uses: aztechaz357/projects-insights-kit/.github/workflows/run.yml@v1
+    with:
+      project_url: "https://github.com/orgs/YOUR-ORG/projects/1"
+      mode: ${{ inputs.mode || 'daily' }}
+      planned_end_date: ${{ inputs.planned_end_date || '' }}
+      start_date: ${{ inputs.start_date || '' }}
+      buffer: ${{ inputs.buffer || 'auto' }}
+      cadence: ${{ inputs.cadence || 'phase+sprint-2w' }}
+      estimate_field: ${{ inputs.estimate_field || '' }}
+      japan_holidays: ${{ github.event_name != 'workflow_dispatch' || inputs.japan_holidays }}
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+</script>
+
+<script>
+(() => {
+  const FILE = ".github/workflows/insights-kit.yml";
+  const MAX_URL = 5000; // GitHub は URL が長すぎると 414/500 を返すため、余裕を持たせる
+  const STORE = "insights-kit-setup";
+  const $ = (id) => document.getElementById(id);
+  const tpl = $("workflow-template").textContent;
+  const fields = ["project", "repo", "branch"];
+
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORE) || "{}");
+    for (const k of fields) if (k in saved) $(k).value = saved[k];
+  } catch (e) { /* 保存できない環境では何もしない */ }
+  const save = () => {
+    try { const o = {}; for (const k of fields) o[k] = $(k).value; localStorage.setItem(STORE, JSON.stringify(o)); } catch (e) { /* noop */ }
+  };
+
+  function parseRepo(s) {
+    s = s.trim().replace(/\.git$/, "").replace(/\/+$/, "");
+    const m = s.match(/^(?:https?:\/\/github\.com\/)?([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)(?:\/.*)?$/);
+    return m ? `${m[1]}/${m[2]}` : null;
+  }
+  function parseProject(s) {
+    const m = s.trim().match(/^https?:\/\/github\.com\/(orgs|users)\/([A-Za-z0-9-]+)\/projects\/(\d+)/);
+    return m ? { kind: m[1], owner: m[2], number: m[3], url: `https://github.com/${m[1]}/${m[2]}/projects/${m[3]}` } : null;
+  }
+  const encPath = (p) => p.split("/").map(encodeURIComponent).join("/");
+
+  function setErr(id, msg) { $(id + "-err").textContent = msg || ""; $(id).classList.toggle("bad", !!msg); }
+  function setLink(id, href) {
+    const a = $(id);
+    if (href) { a.href = href; a.removeAttribute("aria-disabled"); }
+    else { a.removeAttribute("href"); a.setAttribute("aria-disabled", "true"); }
+  }
+
+  function build() {
+    save();
+    const repo = parseRepo($("repo").value);
+    const proj = parseProject($("project").value);
+    const branch = $("branch").value.trim() || "main";
+    setErr("repo", $("repo").value.trim() && !repo ? "owner/name の形か、リポジトリの URL を入れてください" : "");
+    setErr("project", $("project").value.trim() && !proj ? "https://github.com/orgs/<組織>/projects/<番号> (個人は /users/) の形です" : "");
+
+    let yml = tpl;
+    if (proj) yml = yml.replace(/^(\s*project_url: ).*$/m, `$1"${proj.url}"`);
+    $("preview").textContent = yml;
+
+    const ready = repo && proj;
+    const missing = [];
+    if (!proj) missing.push("GitHub Project の URL");
+    if (!repo) missing.push("リポジトリ");
+    $("form-err").textContent = ready ? "" : `手順 1 を入力してください (未入力・誤り: ${missing.join("、")})`;
+
+    const newBase = repo ? `https://github.com/${repo}/new/${encPath(branch)}?filename=${encodeURIComponent(FILE)}` : null;
+    const full = ready ? `${newBase}&value=${encodeURIComponent(yml)}` : null;
+    const tooLong = full && full.length > MAX_URL;
+    setLink("open-prefilled", ready && !tooLong ? full : null);
+    $("long-note").hidden = !tooLong;
+    if (tooLong) $("fallback").open = true;
+    setLink("open-empty", newBase);
+    setLink("open-secret", repo ? `https://github.com/${repo}/settings/secrets/actions/new` : null);
+    setLink("open-actions", repo ? `https://github.com/${repo}/actions/workflows/insights-kit.yml` : null);
+
+    if (!proj) {
+      $("token-how").textContent = "先に手順 1 の GitHub Project の URL を入れてください。";
+    } else if (proj.kind === "orgs") {
+      $("token-how").innerHTML =
+        `<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained トークンの作成画面</a> で、` +
+        `<b>Resource owner</b> を <code>${proj.owner}</code> にし、<b>Repository access</b> で Project の Issue があるリポジトリを選び (迷ったら All repositories)、` +
+        `<b>Organization permissions → Projects: Read and write</b>、<b>Repository permissions → Issues: Read-only</b> と <b>Pull requests: Read-only</b> を付けて Generate。` +
+        `組織の設定によっては管理者の承認が必要です。`;
+    } else {
+      $("token-how").innerHTML =
+        `<a href="https://github.com/settings/tokens/new?scopes=repo,project&description=insights-kit" target="_blank" rel="noopener">classic トークンの作成画面</a> ` +
+        `(<code>repo</code> と <code>project</code> にチェック済み) で、有効期限を選んで Generate。`;
+    }
+  }
+
+  for (const k of fields) { $(k).addEventListener("input", build); $(k).addEventListener("change", build); }
+
+  $("copy").addEventListener("click", async () => {
+    const text = $("preview").textContent;
+    let ok = false;
+    try { await navigator.clipboard.writeText(text); ok = true; } catch (e) {
+      const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch (e2) { ok = false; }
+      ta.remove();
+    }
+    $("copied").textContent = ok ? "コピーしました" : "コピーできませんでした。下の内容を選択してコピーしてください";
+    $("copied").hidden = false;
+    setTimeout(() => { $("copied").hidden = true; }, 3000);
+  });
+
+  build();
+})();
+</script>
+</body>
+</html>
