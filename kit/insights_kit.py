@@ -7,11 +7,13 @@
   - 進め方 (cadence): 2週間 / 1週間スプリント、ウォーターフォールの工程 (Phase)、工程 × スプリント、なし
   - フィーバーチャート: 進捗率とバッファ消費率を毎日計算し、Project のドラフト Issue と SVG に記録
 
-通常は GitHub Actions (setup.yml / daily.yml) から実行します。手元で動かす場合は GH_TOKEN (または .env の PROJECT_TOKEN) を設定して:
+設定と履歴は Project 内のドラフト Issue「📈 Fever: 進捗率」の本文に保存するため、リポジトリへの書き込みは不要です。
+通常は GitHub Actions (.github/workflows/run.yml を呼ぶワークフロー) から実行します。
+手元で動かす場合は GH_TOKEN (または .env の PROJECT_TOKEN) を設定して:
 
   python kit/insights_kit.py setup --project-url URL --planned-end-date YYYY-MM-DD [--start-date ...] [--buffer auto|N]
                                    [--cadence phase+sprint-2w] [--estimate-field 名前] [--no-japan-holidays]
-  python kit/insights_kit.py daily [--date YYYY-MM-DD]
+  python kit/insights_kit.py daily --project-url URL [--date YYYY-MM-DD]
   python kit/insights_kit.py check-token
 """
 from __future__ import annotations
@@ -28,11 +30,11 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-CONFIG = ROOT / "insights-kit.json"
-DOCS = ROOT / "docs"
-HISTORY = DOCS / "fever-history.json"
-FEVER_SVG = DOCS / "fever-chart.svg"
 DOTENV = ROOT / ".env"
+STATE_METRIC = "Progress %"  # 設定と履歴はこのトラッカーの本文に保存
+CONFIG_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
+HISTORY_RE = re.compile(r"<!-- insights-kit:history\s*(\[.*?\])\s*-->", re.S)
+MAX_HISTORY = 400
 
 JST = dt.timezone(dt.timedelta(hours=9))
 HOLIDAY_API = "https://holidays-jp.github.io/api/v1/date.json"
@@ -384,46 +386,63 @@ def cmd_setup(a) -> None:
         else:
             warn(f"Iteration フィールド「{names['sprint']}」を API で作成できませんでした。Project の Settings から手動で作成してください")
 
+    # 既存の設定 (手で調整した値) と履歴を引き継ぐ
+    trackers = find_trackers(proj.items(), names["fever_metric"])
+    old, history = {}, []
+    if STATE_METRIC in trackers:
+        old, history = parse_state(trackers[STATE_METRIC]["content"].get("body") or "", strict=False)
     cfg = {
         "project": info,
         "schedule": {"start_date": start.isoformat(), "planned_end_date": planned_end.isoformat(), "buffer": buffer,
-                     "japan_holidays": not a.no_japan_holidays, "extra_holidays": []},
+                     "japan_holidays": not a.no_japan_holidays,
+                     "extra_holidays": old.get("schedule", {}).get("extra_holidays", [])},
         "cadence": a.cadence,
         "fields": names,
-        "done_status": ["Done"],
-        "fever_zones": {"yellow": [0.10, 0.70], "red": [0.30, 0.90]},
-        "buffer_auto": {"k": 2.0, "fallback_ratio": 0.5},
+        "done_status": old.get("done_status", ["Done"]),
+        "fever_zones": old.get("fever_zones", {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}),
+        "buffer_auto": old.get("buffer_auto", {"k": 2.0, "fallback_ratio": 0.5}),
     }
-    if CONFIG.exists():  # 再セットアップ時、手で調整した値は引き継ぐ
-        old = load(CONFIG)
-        for k in ("done_status", "fever_zones", "buffer_auto"):
-            cfg[k] = old.get(k, cfg[k])
-        cfg["schedule"]["extra_holidays"] = old.get("schedule", {}).get("extra_holidays", [])
-    save(CONFIG, cfg)
-
-    ensure_trackers(proj, cfg, proj.fields())
+    ensure_trackers(proj, names, proj.fields(), trackers)
     summary(f"## ✅ セットアップ完了: [{info['title']}]({info['url']})\n\n"
             f"- 期間: {start} 〜 {planned_end} (バッファ: {buffer if buffer == 'auto' else f'{buffer} 営業日'})\n"
             f"- 進め方: {CADENCES[a.cadence]}\n"
             f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
-            f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n")
+            f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n"
+            f"- 設定の保存先: Project 内のドラフト「📈 Fever: 進捗率」の本文 (JSON を編集すると次回から反映)\n")
     summary(insights_recipe(cfg))
-    run_daily(cfg, today_jst())
+    run_daily(proj, cfg, history, today_jst(), Path(a.out))
 
 
-def ensure_trackers(proj: Project, cfg: dict, fields: dict) -> dict:
-    f = cfg["fields"]
-    found = {}
-    for it in proj.items():
-        metric = it["values"].get(f["fever_metric"])
-        if it["type"] == "DRAFT_ISSUE" and metric in dict((m[0], 1) for m in METRICS):
-            found[metric] = it
+def find_trackers(items: list[dict], metric_field: str) -> dict:
+    names = {m[0] for m in METRICS}
+    return {it["values"][metric_field]: it for it in items
+            if it["type"] == "DRAFT_ISSUE" and it["values"].get(metric_field) in names}
+
+
+def ensure_trackers(proj: Project, names: dict, fields: dict, trackers: dict) -> None:
     for metric, _, label in METRICS:
-        if metric not in found:
-            item_id = proj.create_draft(f"📈 Fever: {label} ({metric})", "フィーバーチャート用 (Projects Insights Kit が自動更新)")
-            proj.set_option(item_id, fields[f["fever_metric"]], metric)
+        if metric not in trackers:
+            item_id = proj.create_draft(f"📈 Fever: {label} ({metric})", "Projects Insights Kit が自動更新します")
+            proj.set_option(item_id, fields[names["fever_metric"]], metric)
             print(f"  + tracker draft: {metric}")
-    return found
+
+
+def parse_state(body: str, strict: bool) -> tuple[dict, list]:
+    cfg, history = {}, []
+    m = CONFIG_RE.search(body)
+    if m:
+        try:
+            cfg = json.loads(m.group(1))
+        except json.JSONDecodeError as e:
+            if strict:
+                die(f"「📈 Fever: 進捗率」の設定 JSON が壊れています ({e})。カンマや引用符を確認してください")
+    h = HISTORY_RE.search(body)
+    if h:
+        try:
+            history = json.loads(h.group(1))
+        except json.JSONDecodeError:
+            warn("履歴を読み取れませんでした。今日から記録し直します")
+    return cfg, history
 
 
 def insights_recipe(cfg: dict) -> str:
@@ -455,28 +474,33 @@ def slug(name: str) -> str:
 
 # ==================================================================== daily
 def cmd_daily(a) -> None:
-    if not CONFIG.exists():
-        die("insights-kit.json がありません。先に「1. Setup」ワークフローを実行してください")
-    run_daily(load(CONFIG), parse_date(a.date, "date") if a.date else today_jst())
+    url = a.project_url or os.environ.get("PROJECT_URL", "")
+    info = Project.resolve(url)
+    proj = Project(info)
+    trackers = find_trackers(proj.items(), DEFAULT_FIELDS["fever_metric"])
+    if STATE_METRIC not in trackers:
+        die("この Project はまだセットアップされていません。先に mode: setup で実行してください")
+    cfg, history = parse_state(trackers[STATE_METRIC]["content"].get("body") or "", strict=True)
+    if not cfg:
+        die("「📈 Fever: 進捗率」の本文に設定 JSON がありません。mode: setup で再実行してください")
+    cfg["project"] = info
+    run_daily(proj, cfg, history, parse_date(a.date, "date") if a.date else today_jst(), Path(a.out))
 
 
-def run_daily(cfg: dict, today: dt.date) -> None:
+def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path) -> None:
     f = cfg["fields"]
-    proj = Project(cfg["project"])
     fields = proj.fields()
     cal = Calendar(cfg)
-    metric_names = {m[0] for m in METRICS}
 
     # --- 1) PERT で見積を更新
     items = proj.items()
-    work, trackers, updated, missing = [], {}, 0, 0
+    trackers = find_trackers(items, f["fever_metric"])
+    tracker_ids = {it["id"] for it in trackers.values()}
+    work, updated = [], 0
     for it in items:
         v = it["values"]
-        if it["type"] == "DRAFT_ISSUE" and v.get(f["fever_metric"]) in metric_names:
-            trackers[v[f["fever_metric"]]] = it
-            continue
-        if it["type"] not in ("ISSUE", "DRAFT_ISSUE"):
-            continue  # PR は集計しない
+        if it["id"] in tracker_ids or it["type"] not in ("ISSUE", "DRAFT_ISSUE"):
+            continue  # トラッカーと PR は集計しない
         if it["type"] == "ISSUE" and not it["content"].get("url"):
             continue  # 権限が無く中身が見えない Issue
         e = pert(v.get(f["optimistic"]), v.get(f["most_likely"]), v.get(f["pessimistic"]))
@@ -510,60 +534,73 @@ def run_daily(cfg: dict, today: dt.date) -> None:
     buffer_days, buffer_how = compute_buffer(cfg, plan_days, total if unit == "人日" else 0, var_sum)
     deadline = cal.add(planned_end, buffer_days)
 
-    if today < start:
-        summary(f"開始日 {start} 前のため、見積の更新のみ行いました (更新 {updated} 件)")
-        return
-    elapsed = cal.elapsed(start, today)
-    p = done / total if total else 0.0
-    b = max(0.0, elapsed - p * plan_days) / buffer_days
-    zone = fever_zone(p, b, cfg["fever_zones"])
-    row = {"date": today.isoformat(), "elapsed_days": elapsed, "done": round(done, 2), "total": round(total, 2), "unit": unit,
-           "progress": round(p * 100, 1), "buffer": round(b * 100, 1), "buffer_days": buffer_days, "zone": zone}
-    history = [h for h in (load(HISTORY) if HISTORY.exists() else []) if h["date"] != row["date"]] + [row]
-    history.sort(key=lambda h: h["date"])
-    save(HISTORY, history)
-    svg_fever_chart(FEVER_SVG, history, cfg["fever_zones"], f"フィーバーチャート — {cfg['project']['title']}")
+    row = None
+    if today >= start:
+        elapsed = cal.elapsed(start, today)
+        p = done / total if total else 0.0
+        b = max(0.0, elapsed - p * plan_days) / buffer_days
+        row = {"date": today.isoformat(), "elapsed_days": elapsed, "done": round(done, 2), "total": round(total, 2),
+               "unit": unit, "progress": round(p * 100, 1), "buffer": round(b * 100, 1), "buffer_days": buffer_days,
+               "zone": fever_zone(p, b, cfg["fever_zones"])}
+        history = sorted([h for h in history if h["date"] != row["date"]] + [row], key=lambda h: h["date"])[-MAX_HISTORY:]
+    out.mkdir(parents=True, exist_ok=True)
+    save(out / "fever-history.json", history)
+    svg_fever_chart(out / "fever-chart.svg", history, cfg["fever_zones"], f"フィーバーチャート — {cfg['project']['title']}")
 
-    # --- 3) トラッカー (ドラフト Issue) を更新
-    body = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing)
+    # --- 3) トラッカー (ドラフト Issue) を更新。設定と履歴は「進捗率」側に保存
     if len(trackers) < len(METRICS):
-        ensure_trackers(proj, cfg, fields)
-        trackers = {it["values"][f["fever_metric"]]: it for it in proj.items()
-                    if it["type"] == "DRAFT_ISSUE" and it["values"].get(f["fever_metric"]) in metric_names}
+        ensure_trackers(proj, f, fields, trackers)
+        trackers = find_trackers(proj.items(), f["fever_metric"])
+    visible = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing)
+    stored_cfg = {k: v for k, v in cfg.items() if k != "project"}
     for metric, it in trackers.items():
-        value = row["progress"] if metric == "Progress %" else row["buffer"]
-        if it["values"].get(f["fever_value"]) != value:
-            proj.set_number(it["id"], fields[f["fever_value"]], value)
-        if it["values"].get(f["fever_zone"]) != zone:
-            proj.set_option(it["id"], fields[f["fever_zone"]], zone)
+        if metric == STATE_METRIC:
+            body = (f"{visible}\n\n### ⚙️ 設定 (編集できます。次回の実行から反映)\n\n```json\n"
+                    f"{json.dumps(stored_cfg, ensure_ascii=False, indent=2)}\n```\n\n"
+                    f"<!-- insights-kit:history\n{json.dumps(history, ensure_ascii=False, separators=(',', ':'))}\n-->")
+        else:
+            body = f"{visible}\n\n設定と履歴は「📈 Fever: 進捗率」の本文にあります。"
+        if row:
+            value = row["progress"] if metric == "Progress %" else row["buffer"]
+            if it["values"].get(f["fever_value"]) != value:
+                proj.set_number(it["id"], fields[f["fever_value"]], value)
+            if it["values"].get(f["fever_zone"]) != row["zone"]:
+                proj.set_option(it["id"], fields[f["fever_zone"]], row["zone"])
         if it["content"].get("body") != body:
             proj.edit_draft(it["content"]["id"], body)
 
+    if not row:
+        summary(f"開始日 {start} 前のため、見積の更新と設定の保存のみ行いました (見積更新 {updated} 件)")
+        return
+    zone = row["zone"]
     summary(f"## {ZONE_EMOJI[zone]} {today} — 進捗 {row['progress']}% / バッファ消費 {row['buffer']}%\n\n"
             f"| 項目 | 値 |\n|---|---|\n"
             f"| 完了 / 全体 | {row['done']} / {row['total']} {unit} |\n"
-            f"| 経過 / 計画 | {elapsed} / {plan_days} 営業日 |\n"
+            f"| 経過 / 計画 | {row['elapsed_days']} / {plan_days} 営業日 |\n"
             f"| バッファ | {buffer_days} 営業日 ({buffer_how}) |\n"
             f"| 納期 (バッファ込み) | {deadline} |\n"
             f"| PERT で見積を更新 | {updated} 件 |\n"
-            f"| 見積が未入力 | {missing} 件 |\n")
+            f"| 見積が未入力 | {missing} 件 |\n\n"
+            "フィーバーチャートの図 (SVG) は、この実行結果の Artifacts からダウンロードできます。\n")
     print(f"progress={row['progress']}% buffer={row['buffer']}% zone={zone} ({row['done']}/{row['total']} {unit}), estimates updated={updated}")
 
 
 def tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing) -> str:
     sch = cfg["schedule"]
     lines = [
-        "Projects Insights Kit が毎営業日自動更新します (手で編集しても上書きされます)。",
+        "Projects Insights Kit が毎営業日自動更新します (表は上書きされます)。",
         "",
         f"- 期間: {sch['start_date']} 〜 {sch['planned_end_date']} (計画 {plan_days} 営業日) / 納期 (バッファ込み): {deadline}",
         f"- プロジェクトバッファ: {buffer_days} 営業日 ({buffer_how})",
         f"- 見積が未入力の項目: {missing} 件",
         "",
-        "| 日付 | 完了 / 全体 | 進捗率 | バッファ消費率 | ゾーン |",
-        "|---|---:|---:|---:|:---:|",
     ]
-    for h in history[-30:]:
-        lines.append(f"| {h['date']} | {h['done']} / {h['total']} {h['unit']} | {h['progress']}% | {h['buffer']}% | {ZONE_EMOJI[h['zone']]} |")
+    if history:
+        lines += ["| 日付 | 完了 / 全体 | 進捗率 | バッファ消費率 | ゾーン |", "|---|---:|---:|---:|:---:|"]
+        for h in history[-30:]:
+            lines.append(f"| {h['date']} | {h['done']} / {h['total']} {h['unit']} | {h['progress']}% | {h['buffer']}% | {ZONE_EMOJI[h['zone']]} |")
+    else:
+        lines.append("(開始日から記録を始めます)")
     return "\n".join(lines)
 
 
@@ -658,8 +695,11 @@ def main() -> None:
     s.add_argument("--cadence", default="sprint-2w", choices=list(CADENCES))
     s.add_argument("--estimate-field", default="", help="既存の見積 (数値) フィールド名。空なら「見積 (人日)」を作成")
     s.add_argument("--no-japan-holidays", action="store_true")
+    s.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")
     s.set_defaults(fn=cmd_setup)
     d = sub.add_parser("daily", help="見積の再計算とフィーバー指標の更新")
+    d.add_argument("--project-url", default="", help="既定: 環境変数 PROJECT_URL")
+    d.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")
     d.add_argument("--date", default="", help="基準日 (既定: 今日 JST)")
     d.set_defaults(fn=cmd_daily)
     sub.add_parser("check-token", help="トークンの確認").set_defaults(fn=cmd_check_token)

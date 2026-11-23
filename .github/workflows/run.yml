@@ -1,0 +1,121 @@
+name: Insights Kit (reusable)
+
+# 他のリポジトリから `uses: aztechaz357/projects-insights-kit/.github/workflows/run.yml@v1` で呼び出す本体。
+# 呼び出し元のリポジトリには何も書き込まない (設定と履歴は Project 内のドラフト Issue に保存)。
+on:
+  workflow_call:
+    inputs:
+      project_url:
+        description: "対象 Project の URL"
+        required: true
+        type: string
+      mode:
+        description: "daily | setup"
+        required: false
+        default: daily
+        type: string
+      planned_end_date:
+        required: false
+        default: ""
+        type: string
+      start_date:
+        required: false
+        default: ""
+        type: string
+      buffer:
+        required: false
+        default: auto
+        type: string
+      cadence:
+        required: false
+        default: phase+sprint-2w
+        type: string
+      estimate_field:
+        required: false
+        default: ""
+        type: string
+      japan_holidays:
+        required: false
+        default: true
+        type: boolean
+      kit_repository:
+        description: "キット本体のリポジトリ (社内に fork した場合はここを変える)"
+        required: false
+        default: aztechaz357/projects-insights-kit
+        type: string
+      kit_ref:
+        description: "キット本体のバージョン (タグ / ブランチ / コミット SHA)"
+        required: false
+        default: v1
+        type: string
+    secrets:
+      PROJECT_TOKEN:
+        required: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      # 入力値は env 経由で渡す (スクリプトインジェクション対策)
+      IN_PROJECT_URL: ${{ inputs.project_url }}
+      IN_MODE: ${{ inputs.mode }}
+      IN_PLANNED_END: ${{ inputs.planned_end_date }}
+      IN_START: ${{ inputs.start_date }}
+      IN_BUFFER: ${{ inputs.buffer }}
+      IN_CADENCE: ${{ inputs.cadence }}
+      IN_ESTIMATE_FIELD: ${{ inputs.estimate_field }}
+      IN_JP_HOLIDAYS: ${{ inputs.japan_holidays }}
+    steps:
+      - name: Check inputs
+        id: check
+        run: |
+          if [[ "$IN_PROJECT_URL" == *YOUR-ORG* || -z "$IN_PROJECT_URL" ]]; then
+            echo "::notice::project_url がまだ設定されていません (ワークフローファイルの YOUR-ORG を書き換えてください)。スキップします"
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Secret PROJECT_TOKEN が登録されていません"; exit 1
+          fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.ready == 'true'
+        with:
+          repository: ${{ inputs.kit_repository }}
+          ref: ${{ inputs.kit_ref }}
+          path: .insights-kit
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        if: steps.check.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Check token
+        if: steps.check.outputs.ready == 'true'
+        run: python .insights-kit/kit/insights_kit.py check-token
+
+      - name: Run
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          KIT=.insights-kit/kit/insights_kit.py
+          if [ "$IN_MODE" = "setup" ]; then
+            if [ -z "$IN_PLANNED_END" ]; then echo "::error::setup には planned_end_date (計画完了日) が必要です"; exit 1; fi
+            args=(--project-url "$IN_PROJECT_URL" --planned-end-date "$IN_PLANNED_END" --buffer "$IN_BUFFER" --cadence "$IN_CADENCE")
+            [ -n "$IN_START" ] && args+=(--start-date "$IN_START")
+            [ -n "$IN_ESTIMATE_FIELD" ] && args+=(--estimate-field "$IN_ESTIMATE_FIELD")
+            [ "$IN_JP_HOLIDAYS" = "true" ] || args+=(--no-japan-holidays)
+            python "$KIT" setup "${args[@]}" --out insights-kit-out
+          else
+            python "$KIT" daily --project-url "$IN_PROJECT_URL" --out insights-kit-out
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: steps.check.outputs.ready == 'true'
+        with:
+          name: fever-chart
+          path: insights-kit-out/
+          retention-days: 30

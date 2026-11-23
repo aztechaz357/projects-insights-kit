@@ -1,0 +1,63 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Projects Insights Kit — このファイル1つを、既存リポジトリの .github/workflows/ に置くだけで動きます。
+#   1. 下の project_url の YOUR-ORG / 番号 を、対象 Project の URL に書き換える (1 か所だけ)
+#   2. Settings → Secrets and variables → Actions に PROJECT_TOKEN を登録
+#   3. Actions → Insights Kit → Run workflow で mode: setup を選んで実行
+# 以降は平日 09:00 (日本時間) に自動更新されます。リポジトリには何も書き込みません。
+# ─────────────────────────────────────────────────────────────────────────────
+name: Insights Kit
+
+on:
+  schedule:
+    - cron: "0 0 * * 1-5" # 00:00 UTC = 09:00 JST (平日)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "daily = いますぐ更新 / setup = 初回設定・設定変更"
+        required: true
+        default: daily
+        type: choice
+        options: [daily, setup]
+      planned_end_date:
+        description: "[setup] 計画完了日 (バッファを含まない) YYYY-MM-DD"
+        required: false
+        type: string
+      start_date:
+        description: "[setup] 開始日 YYYY-MM-DD (空 = 今日)"
+        required: false
+        type: string
+      buffer:
+        description: "[setup] プロジェクトバッファ: auto = 三点見積から自動 / 数字 = 営業日数"
+        required: false
+        default: auto
+        type: string
+      cadence:
+        description: "[setup] 進め方"
+        required: false
+        default: phase+sprint-2w
+        type: choice
+        options: [phase+sprint-2w, sprint-2w, sprint-1w, phase, none]
+      estimate_field:
+        description: "[setup] 既存の見積 (数値) フィールド名 (空 = 「見積 (人日)」を新しく作る)"
+        required: false
+        type: string
+      japan_holidays:
+        description: "[setup] 日本の祝日を営業日から除外する"
+        required: false
+        default: true
+        type: boolean
+
+jobs:
+  kit:
+    uses: aztechaz357/projects-insights-kit/.github/workflows/run.yml@v1
+    with:
+      project_url: "https://github.com/orgs/YOUR-ORG/projects/1" # ← ここを書き換える
+      mode: ${{ inputs.mode || 'daily' }}
+      planned_end_date: ${{ inputs.planned_end_date || '' }}
+      start_date: ${{ inputs.start_date || '' }}
+      buffer: ${{ inputs.buffer || 'auto' }}
+      cadence: ${{ inputs.cadence || 'phase+sprint-2w' }}
+      estimate_field: ${{ inputs.estimate_field || '' }}
+      japan_holidays: ${{ github.event_name != 'workflow_dispatch' || inputs.japan_holidays }}
+    secrets:
+      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
