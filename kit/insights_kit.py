@@ -252,7 +252,13 @@ class Project:
         if not m:
             die("Project の URL は https://github.com/orgs/<org>/projects/<番号> (個人は /users/) の形で入力してください")
         kind, owner, number = m.group(1), m.group(2), int(m.group(3))
-        p = gh("project", "view", str(number), "--owner", owner, "--format", "json", json_out=True)
+        # gh project view は所有者の種別判定で read:org 等を要求するため、URL から判別して GraphQL を直接呼ぶ
+        root = "organization" if kind == "orgs" else "user"
+        data = gql(f"query($login: String!, $n: Int!) {{ {root}(login: $login) {{ projectV2(number: $n) {{ id title url }} }} }}",
+                   check=False, login=owner, n=number)
+        p = ((data or {}).get(root) or {}).get("projectV2")
+        if not p:
+            die(f"Project {url} を開けませんでした。URL と、トークンの Projects 権限 (Resource owner) を確認してください")
         return {"url": p["url"], "owner": owner, "owner_type": "Organization" if kind == "orgs" else "User",
                 "number": number, "id": p["id"], "title": p["title"]}
 
@@ -287,7 +293,8 @@ class Project:
             after = data["pageInfo"]["endCursor"]
 
     def create_number(self, name: str) -> None:
-        gh("project", "field-create", str(self.number), "--owner", self.owner, "--name", name, "--data-type", "NUMBER")
+        gql(f"mutation {{ createProjectV2Field(input: {{projectId: {q(self.id)}, dataType: NUMBER, name: {q(name)}}}) "
+            f"{{ projectV2Field {{ ... on ProjectV2Field {{ id }} }} }} }}")
 
     def create_select(self, name: str, options: list[tuple]) -> None:
         opts = ", ".join(f"{{name: {q(o[0])}, color: {o[1]}, description: {q(o[2] if len(o) > 2 else '')}}}" for o in options)
@@ -303,19 +310,24 @@ class Project:
                   f"{{ projectV2Field {{ ... on ProjectV2IterationField {{ id }} }} }} }}", check=False)
         return res is not None
 
+    def _set_value(self, item_id: str, field: dict, value_literal: str) -> None:
+        gql(f"mutation {{ updateProjectV2ItemFieldValue(input: {{projectId: {q(self.id)}, itemId: {q(item_id)}, "
+            f"fieldId: {q(field['id'])}, value: {{{value_literal}}}}}) {{ projectV2Item {{ id }} }} }}")
+
     def set_number(self, item_id: str, field: dict, value: float) -> None:
-        gh("project", "item-edit", "--id", item_id, "--project-id", self.id, "--field-id", field["id"], "--number", str(value))
+        self._set_value(item_id, field, f"number: {float(value)!r}")
 
     def set_option(self, item_id: str, field: dict, option: str) -> None:
-        gh("project", "item-edit", "--id", item_id, "--project-id", self.id, "--field-id", field["id"],
-           "--single-select-option-id", field["options"][option])
+        self._set_value(item_id, field, f"singleSelectOptionId: {q(field['options'][option])}")
 
     def create_draft(self, title: str, body: str) -> str:
-        return gh("project", "item-create", str(self.number), "--owner", self.owner, "--title", title, "--body", body,
-                  "--format", "json", json_out=True)["id"]
+        data = gql("mutation($p: ID!, $t: String!, $b: String!) { addProjectV2DraftIssue(input: {projectId: $p, title: $t, body: $b}) "
+                   "{ projectItem { id } } }", p=self.id, t=title, b=body)
+        return data["addProjectV2DraftIssue"]["projectItem"]["id"]
 
     def edit_draft(self, draft_id: str, body: str) -> None:
-        gh("project", "item-edit", "--id", draft_id, "--body", body)
+        gql("mutation($d: ID!, $b: String!) { updateProjectV2DraftIssue(input: {draftIssueId: $d, body: $b}) { draftIssue { id } } }",
+            d=draft_id, b=body)
 
 
 # ==================================================================== setup
