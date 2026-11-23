@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 480" font-family="sans-serif" font-size="12">
+<rect width="640" height="480" fill="#fff"/>
+<text x="70" y="30" font-size="16" font-weight="bold" fill="#24292f">フィーバーチャート — Setup 後に更新されます</text>
+<polygon points="70.0,420.0 610.0,420.0 610.0,204.2 70.0,389.2" fill="#dafbe1"/>
+<polygon points="70.0,389.2 610.0,204.2 610.0,142.5 70.0,327.5" fill="#fff8c5"/>
+<polygon points="70.0,327.5 610.0,142.5 610.0,50.0 70.0,50.0" fill="#ffebe9"/>
+<text x="70.0" y="438" text-anchor="middle" fill="#57606a">0%</text>
+<text x="178.0" y="438" text-anchor="middle" fill="#57606a">20%</text>
+<text x="286.0" y="438" text-anchor="middle" fill="#57606a">40%</text>
+<text x="394.0" y="438" text-anchor="middle" fill="#57606a">60%</text>
+<text x="502.0" y="438" text-anchor="middle" fill="#57606a">80%</text>
+<text x="610.0" y="438" text-anchor="middle" fill="#57606a">100%</text>
+<line x1="70" x2="610" y1="420.0" y2="420.0" stroke="#00000014"/>
+<text x="62" y="424.0" text-anchor="end" fill="#57606a">0%</text>
+<line x1="70" x2="610" y1="358.3" y2="358.3" stroke="#00000014"/>
+<text x="62" y="362.3" text-anchor="end" fill="#57606a">20%</text>
+<line x1="70" x2="610" y1="296.7" y2="296.7" stroke="#00000014"/>
+<text x="62" y="300.7" text-anchor="end" fill="#57606a">40%</text>
+<line x1="70" x2="610" y1="235.0" y2="235.0" stroke="#00000014"/>
+<text x="62" y="239.0" text-anchor="end" fill="#57606a">60%</text>
+<line x1="70" x2="610" y1="173.3" y2="173.3" stroke="#00000014"/>
+<text x="62" y="177.3" text-anchor="end" fill="#57606a">80%</text>
+<line x1="70" x2="610" y1="111.7" y2="111.7" stroke="#00000014"/>
+<text x="62" y="115.7" text-anchor="end" fill="#57606a">100%</text>
+<line x1="70" x2="610" y1="50.0" y2="50.0" stroke="#00000014"/>
+<text x="62" y="54.0" text-anchor="end" fill="#57606a">120%</text>
+<line x1="70" x2="610" y1="111.7" y2="111.7" stroke="#cf222e" stroke-dasharray="4 4"/>
+<text x="606" y="105.7" text-anchor="end" fill="#cf222e">バッファ枯渇 (納期遅延)</text>
+<text x="340.0" y="464" text-anchor="middle" fill="#24292f">進捗率 (完了見積 / 全体見積)</text>
+<text x="18" y="235.0" transform="rotate(-90 18 235.0)" text-anchor="middle" fill="#24292f">バッファ消費率</text>
+<rect x="70" y="50" width="540" height="370" fill="none" stroke="#8c959f"/>
+<text x="340.0" y="235.0" text-anchor="middle" fill="#57606a">まだデータがありません</text>
+</svg>

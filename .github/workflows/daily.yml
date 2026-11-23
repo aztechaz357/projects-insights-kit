@@ -1,0 +1,47 @@
+name: "2. Daily update (毎朝自動 / 手動でも可)"
+
+# 平日 09:00 JST に、三点見積から「見積 (人日)」を再計算し、フィーバーチャートを更新する。
+# 見積を入力した直後に反映したいときは Actions 画面から Run workflow で手動実行する。
+on:
+  schedule:
+    - cron: "0 0 * * 1-5" # 00:00 UTC = 09:00 JST (平日)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: insights-kit
+  cancel-in-progress: false
+
+jobs:
+  daily:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check setup
+        id: check
+        run: |
+          if [ -f insights-kit.json ]; then echo "ready=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::まだセットアップされていません。Actions の「1. Setup」を先に実行してください"; fi
+
+      - uses: actions/setup-python@v7
+        if: steps.check.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Update estimates and fever chart
+        if: steps.check.outputs.ready == 'true'
+        run: python kit/insights_kit.py daily
+
+      - name: Commit history
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          git diff --cached --quiet || git commit -m "chore: update fever chart ($(date -u +%F))"
+          git push
