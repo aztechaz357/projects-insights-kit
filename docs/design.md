@@ -84,6 +84,7 @@ flowchart LR
 | 累積フロー図 (CFD) | `svg_cfd` → Artifacts | Summary の「📈 図を開く」 |
 | 簡易版の折れ線 | `fever_mermaid` / `cfd_mermaid` (Mermaid) | Summary の下の方 |
 | 数字の表 | `tracker_body` / `breakdown_md` / `cfd_md` | ドラフト「📈 Fever: 進捗率」の本文と Summary |
+| アイテム (親 Issue) 別の進捗表 | `item_rows` → `items_md` | ドラフト「📈 Fever: 進捗率」の本文と Summary |
 
 ## 3. クラス図
 
@@ -117,6 +118,7 @@ classDiagram
         +count(start, end) int
         +elapsed(start, today) int
         +add(start, bdays) date
+        +back(start, bdays) date
     }
 
     class Commands {
@@ -156,6 +158,9 @@ classDiagram
         <<module>>
         +tracker_body(...) str
         +breakdown_md(cfg, work, items, est, is_done) str
+        +item_rows(items, work, f, cal, today, history, est, is_done) tuple
+        +items_md(rows, f, fields) str
+        +linear_plan(cal, start, due, day) float
         +cfd_md(history, order, done) str
         +insights_recipe(cfg, statuses, fields) str
         +chart_link(url, row, fields, status_field) str
@@ -196,6 +201,7 @@ classDiagram
         buffer_days: float
         zone: str
         status: dict
+        items: dict
     }
 
     class Item {
@@ -225,7 +231,7 @@ classDiagram
 
 | 定数 | 意味 |
 |---|---|
-| `DEFAULT_FIELDS` | キットが使う Project のフィールド名 (Status、楽観・最可能・悲観、見積、Fever Value / Metric / Zone、Phase、Sprint) |
+| `DEFAULT_FIELDS` | キットが使う Project のフィールド名 (Status、楽観・最可能・悲観、見積、Fever Value / Metric / Zone、Phase、Sprint、開始日・完了予定日・Action) |
 | `METRICS` | トラッカーの指標。`Progress %` (進捗率) と `Buffer %` (バッファ消費率) |
 | `ZONES` | フィーバーのゾーン。Green / Yellow / Red |
 | `STATE_METRIC` | 設定と履歴を保存するトラッカー (`Progress %`) |
@@ -440,13 +446,14 @@ flowchart TD
     pertBuf -- はい --> k["計画営業日 × k × √Σσ² / 全体見積"]
     pertBuf -- いいえ --> half[計画営業日 × 50%]
     buf -- 数値 --> manual[指定の営業日]
-    k --> started
-    half --> started
-    manual --> started
+    k --> items
+    half --> items
+    manual --> items
+    items["アイテム (サブ Issue を持つ Issue) ごとに<br/>実績 = 末端のサブ Issue の完了見積 / 全体見積<br/>計画 = 開始日〜完了予定日の直線"] --> started
     started{今日が<br/>開始日以降?}
     started -- いいえ --> svgs
     started -- はい --> calc["進捗率 p = 完了 / 全体<br/>バッファ消費率 b = max(0, 経過営業日 − p × 計画営業日) / バッファ<br/>ゾーン = fever_zone(p, b)<br/>Status 別件数"]
-    calc --> hist[履歴に今日の行を追加<br/>同じ日付は置き換え・最大 260 件]
+    calc --> hist[履歴に今日の行を追加<br/>同じ日付は置き換え・最大 260 件<br/>アイテム別の実績は直近 15 件だけ残す]
     hist --> svgs[SVG と履歴 JSON を out/ に書く]
     svgs --> trk{トラッカーが<br/>2 つある?}
     trk -- いいえ --> mk[足りないトラッカーを作る]
@@ -485,4 +492,4 @@ flowchart LR
 | テスト | 確認すること |
 |---|---|
 | `test_setup_html.py` | setup.html の埋め込みが元のファイルと一致する。GitHub 公式以外のアクションや別リポジトリを使っていない。通信のライブラリを使わず、URL が GitHub だけ。日本の祝日の計算 |
-| `test_kit.py` | CFD の集計と帯の順番、SVG が壊れていない、本文の文字数の上限、Insights のチャート設定表とリンク、Mermaid の図の値 |
+| `test_kit.py` | CFD の集計と帯の順番、SVG が壊れていない、本文の文字数の上限、Insights のチャート設定表とリンク、Mermaid の図の値、アイテム別の進捗表の計算、create の入力チェック |

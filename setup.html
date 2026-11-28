@@ -373,6 +373,9 @@ DEFAULT_FIELDS = {
     "fever_value": "Fever Value",
     "fever_metric": "Fever Metric",
     "fever_zone": "Fever Zone",
+    "start_date": "開始日",
+    "due_date": "完了予定日",
+    "action": "Action",
 }
 
 
@@ -524,6 +527,14 @@ class Calendar:
             left -= self.is_bday(d)
         return d
 
+    def back(self, start: dt.date, bdays: int) -> dt.date:
+        """start から bdays 営業日前の日。"""
+        d, left = start, bdays
+        while left > 0:
+            d -= dt.timedelta(days=1)
+            left -= self.is_bday(d)
+        return d
+
 
 # ==================================================================== metrics
 def pert(o, m, p):
@@ -586,6 +597,8 @@ query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 {
         ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
         ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2FieldCommon { name } } }
         ... on ProjectV2ItemFieldIterationValue { title field { ... on ProjectV2FieldCommon { name } } }
+        ... on ProjectV2ItemFieldDateValue { date field { ... on ProjectV2FieldCommon { name } } }
+        ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
       } } } } } } }"""
 
 
@@ -635,14 +648,18 @@ class Project:
                 vals = {}
                 for v in n["fieldValues"]["nodes"]:
                     if v.get("field"):
-                        vals[v["field"]["name"]] = v.get("number", v.get("name", v.get("title")))
+                        vals[v["field"]["name"]] = next((v[k] for k in ("number", "name", "title", "date", "text") if k in v), None)
                 out.append({"id": n["id"], "type": n["type"], "content": n.get("content") or {}, "values": vals})
             if not data["pageInfo"]["hasNextPage"]:
                 return out
             after = data["pageInfo"]["endCursor"]
 
     def create_number(self, name: str) -> None:
-        gql(f"mutation {{ createProjectV2Field(input: {{projectId: {q(self.id)}, dataType: NUMBER, name: {q(name)}}}) "
+        self.create_field(name, "NUMBER")
+
+    def create_field(self, name: str, data_type: str) -> None:
+        """NUMBER / DATE / TEXT のフィールドを作る。"""
+        gql(f"mutation {{ createProjectV2Field(input: {{projectId: {q(self.id)}, dataType: {data_type}, name: {q(name)}}}) "
             f"{{ projectV2Field {{ ... on ProjectV2Field {{ id }} }} }} }}")
 
     def create_select(self, name: str, options: list[tuple]) -> None:
@@ -758,14 +775,14 @@ def ensure_kit_fields(proj: Project, names: dict, cadence: str, start: dt.date |
     fields = proj.fields()
     created, kept = [], []
 
-    def ensure_number(key):
+    def ensure_field(key, data_type="NUMBER"):
         n = names[key]
         if n in fields:
-            if fields[n]["type"] != "NUMBER":
-                die(f"既存フィールド「{n}」が数値型ではありません ({fields[n]['type']})")
+            if fields[n]["type"] != data_type:
+                die(f"既存フィールド「{n}」の型が {data_type} ではありません ({fields[n]['type']})")
             kept.append(n)
         else:
-            proj.create_number(n)
+            proj.create_field(n, data_type)
             created.append(n)
 
     def ensure_select(key, options):
@@ -782,7 +799,11 @@ def ensure_kit_fields(proj: Project, names: dict, cadence: str, start: dt.date |
     if names["status"] not in fields:
         die(f"Status フィールド「{names['status']}」が見つかりません")
     for key in ("optimistic", "most_likely", "pessimistic", "estimate", "fever_value"):
-        ensure_number(key)
+        ensure_field(key)
+    # アイテム (親 Issue) 別の計画・実績の表に使う
+    ensure_field("start_date", "DATE")
+    ensure_field("due_date", "DATE")
+    ensure_field("action", "TEXT")
     ensure_select("fever_metric", METRICS)
     ensure_select("fever_zone", ZONES)
     if "phase" in cadence:
@@ -1113,24 +1134,159 @@ def breakdown_md(cfg: dict, work: list[dict], all_items: list[dict], est, is_don
                 if c.get("parent"):
                     parent_of[ref.lower()] = issue_ref(c["parent"]).lower()
 
-        def under(ref: str, root: str) -> bool:
-            seen = set()
-            while ref in parent_of and ref not in seen:
-                seen.add(ref)
-                ref = parent_of[ref]
-                if ref == root:
-                    return True
-            return False
-
         lines += ["", "### 🎯 注目 Issue 別 (サブ Issue を孫以下まで集計)", "", head.format("注目 Issue")]
         for root in focus:
-            group = [i for i in work if (r := issue_ref(i["content"])) and under(r.lower(), root.lower())]
+            group = [i for i in work if (r := issue_ref(i["content"])) and is_under(r.lower(), root.lower(), parent_of)]
             title = titles.get(root.lower(), "").replace("|", "\\|")
             label = f"{root} {title}".strip()
             if group:
                 lines.append(f"| {label} | {stats(group)} | `parent-issue:{root}` |")
             else:
                 lines.append(f"| {label} | 0 | - | - | - | サブ Issue がこの Project にありません |")
+    return "\n".join(lines)
+
+
+# ==================================================================== アイテム (親 Issue) 別の PDCA 表
+ITEM_HISTORY_DAYS = 15  # アイテム別の実績は直近の分だけ履歴に残す (週次の比較に 5 営業日前が要る)
+
+
+def is_under(ref: str, root: str, parent_of: dict) -> bool:
+    """ref が root の子孫 (子・孫・…) か。ref・root は小文字の owner/repo#番号。"""
+    seen = set()
+    while ref in parent_of and ref not in seen:
+        seen.add(ref)
+        ref = parent_of[ref]
+        if ref == root:
+            return True
+    return False
+
+
+def parent_items(items: list[dict]) -> tuple[list[dict], dict, set]:
+    """この Project に入っている Issue のうち、サブ Issue (この Project にあるもの) を持つもの = アイテム。
+    戻り値: (アイテム (Project の並び順), 子 → 親 の対応, アイテムの ref の集合)。ref は小文字。"""
+    by_ref, parent_of = {}, {}
+    for it in items:
+        c = it["content"]
+        ref = issue_ref(c) if it["type"] == "ISSUE" else None
+        if ref:
+            by_ref[ref.lower()] = it
+            if c.get("parent"):
+                parent_of[ref.lower()] = issue_ref(c["parent"]).lower()
+    parents = {p for p in parent_of.values() if p in by_ref}
+    return [it for r, it in by_ref.items() if r in parents], parent_of, parents
+
+
+def item_progress(root: str, root_item: dict, work: list[dict], parent_of: dict, parents: set, est, is_done) -> float:
+    """アイテムの進捗率 (%)。子孫のうち末端の Issue (さらにサブ Issue を持たないもの) の、完了した見積 / 全体の見積。
+    見積が 1 件も無ければ件数で計算する。アイテム自身が完了していれば 100%。"""
+    if is_done(root_item):
+        return 100.0
+    leaves = [i for i in work if (r := issue_ref(i["content"])) and r.lower() not in parents
+              and is_under(r.lower(), root, parent_of)]
+    with_est = [i for i in leaves if est(i)]
+    if with_est:
+        return sum(est(i) for i in with_est if is_done(i)) / sum(est(i) for i in with_est) * 100
+    return sum(1 for i in leaves if is_done(i)) / len(leaves) * 100 if leaves else 0.0
+
+
+def linear_plan(cal: Calendar, start: dt.date, due: dt.date, day: dt.date) -> float:
+    """開始日〜完了予定日を営業日で直線に引いた計画で、day の朝の時点で到達しているべき進捗率 (%)。"""
+    n = cal.count(start, due)
+    if n <= 0:
+        return 100.0
+    return min(100.0, cal.elapsed(start, day) / n * 100)
+
+
+def past_actual(history: list[dict], ref: str, on_or_before: dt.date) -> float | None:
+    """履歴の中で on_or_before 以前で最も新しい、そのアイテムの実績 (%)。"""
+    for h in reversed(history):
+        if h["date"] <= on_or_before.isoformat() and ref in (h.get("items") or {}):
+            return h["items"][ref]
+    return None
+
+
+def item_rows(items: list[dict], work: list[dict], f: dict, cal: Calendar, today: dt.date,
+              history: list[dict], est, is_done) -> tuple[list[dict], dict]:
+    """アイテムごとの累計・日次・週次の計画と実績。戻り値: (表の行, 今日の実績 {ref: %})。
+    - 累計: 計画 = 直線の計画で今日の朝に到達しているべき進捗率 / 実績 = 今の進捗率 / 差 = 実績 − 計画
+    - 日次: 計画 = 計画線の 1 営業日分の伸び / 実績 = 前の営業日からの伸び / 次に必要 = 次の営業日の朝の計画 − 今の実績
+    - 週次: 同じく 5 営業日分"""
+    roots, parent_of, parents = parent_items(items)
+    rows, actuals = [], {}
+    prev1, prev5 = cal.back(today, 1), cal.back(today, 5)
+    next1, next5 = cal.add(today, 1), cal.add(today, 5)
+    for no, it in enumerate(roots, 1):
+        c, v = it["content"], it["values"]
+        ref = issue_ref(c)
+        actual = round(item_progress(ref.lower(), it, work, parent_of, parents, est, is_done), 1)
+        actuals[ref] = actual
+        row = {"no": no, "ref": ref, "title": c.get("title", ""), "url": c.get("url", ""),
+               "assignees": [a["login"] for a in ((c.get("assignees") or {}).get("nodes") or [])],
+               "start": v.get(f["start_date"]), "due": v.get(f["due_date"]), "action": v.get(f["action"]) or "",
+               "actual": actual}
+        a1, a5 = past_actual(history, ref, prev1), past_actual(history, ref, prev5)
+        row["d_actual"] = None if a1 is None else round(actual - a1, 1)
+        row["w_actual"] = None if a5 is None else round(actual - a5, 1)
+        try:
+            start, due = dt.date.fromisoformat(row["start"]), dt.date.fromisoformat(row["due"])
+        except (TypeError, ValueError):
+            rows.append(row)  # 日付が未入力なら計画は出さない
+            continue
+        plan = linear_plan(cal, start, due, today)
+        row.update(plan=round(plan, 1), diff=round(actual - plan, 1),
+                   d_plan=round(plan - linear_plan(cal, start, due, prev1), 1),
+                   d_need=round(max(0.0, linear_plan(cal, start, due, next1) - actual), 1),
+                   w_plan=round(plan - linear_plan(cal, start, due, prev5), 1),
+                   w_need=round(max(0.0, linear_plan(cal, start, due, next5) - actual), 1))
+        rows.append(row)
+    return rows, actuals
+
+
+def items_md(rows: list[dict], f: dict, fields: dict) -> str:
+    """アイテム別の計画・実績の表 (Markdown)。"""
+    lines = ["### 📋 アイテム別の進捗 (サブ Issue を持つ Issue ごと)", ""]
+    missing = [f[k] for k in ("start_date", "due_date", "action") if f[k] not in fields]
+    if missing:
+        lines += [f"⚠️ Project にフィールド {', '.join(missing)} がありません。mode: setup を再実行すると追加されます。", ""]
+    if not rows:
+        return "\n".join(lines + ["(サブ Issue を持つ Issue がこの Project にありません。親 Issue とサブ Issue を Project に入れると表示されます)"])
+
+    def pct(x):
+        return "-" if x is None else f"{x:.1f}%"
+
+    def plus(x):
+        return "-" if x is None else (f"+{x:.1f}" if x >= 0 else f"{x:.1f}")
+
+    def cell(s):
+        return str(s).replace("|", "\\|").replace("\r", "").replace("\n", " ")
+
+    lines += [
+        f"- **累計**: 「{f['start_date']}」〜「{f['due_date']}」の営業日に直線で計画を引き、今日の朝に到達しているべき進捗率 (計画) と"
+        "今の進捗率 (実績) を比べます。進捗率 = 末端のサブ Issue の完了した見積 / 全体の見積",
+        "- **日次・週次**: 計画 = 計画線の 1 営業日 (5 営業日) 分の伸び / 実績 = 前の営業日 (5 営業日前) からの伸び / "
+        "次に必要 = 次の 1 営業日 (5 営業日) で計画線に追いつくのに必要な伸び (ポイント)",
+        f"- **Action**: 親 Issue の「{f['action']}」フィールドに書いた内容 (Project の表で入力します)",
+        "",
+        "| No. | アイテム | 担当者 | 開始日 | 完了予定日 | 累計 計画 | 累計 実績 | 差 | 日次 計画 | 日次 実績 | 次の1日で必要 "
+        "| 週次 計画 | 週次 実績 | 次の1週で必要 | Action |",
+        "|---:|---|---|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    one_repo = len({r["ref"].split("#")[0] for r in rows}) == 1  # 1 つのリポジトリだけなら #番号 で短く書く
+    for r in rows:
+        ref = "#" + r["ref"].split("#")[1] if one_repo else r["ref"]
+        item = f"[{cell(ref)}]({r['url']}) {cell(r['title'])}" if r["url"] else cell(r["title"])
+        who = ", ".join(f"@{a}" for a in r["assignees"]) or "-"
+        if "plan" in r:
+            mark = "🟢" if r["diff"] >= 0 else ("🟡" if r["diff"] > -10 else "🔴")
+            plan_cells = [pct(r["plan"]), pct(r["actual"]), f"{mark} {plus(r['diff'])}",
+                          plus(r["d_plan"]), plus(r["d_actual"]), plus(r["d_need"]),
+                          plus(r["w_plan"]), plus(r["w_actual"]), plus(r["w_need"])]
+        else:
+            plan_cells = ["-", pct(r["actual"]), "日付が未入力", "-", plus(r["d_actual"]), "-", "-", plus(r["w_actual"]), "-"]
+        lines.append(f"| {r['no']} | {item} | {who} | {r['start'] or '-'} | {r['due'] or '-'} | "
+                     + " | ".join(plan_cells) + f" | {cell(r['action']) or '-'} |")
+    lines += ["", "差: 🟢 計画どおりか先行 / 🟡 10 ポイント未満の遅れ / 🔴 10 ポイント以上の遅れ。"
+              "日次・週次の実績は、前の日 (5 営業日前) の記録があるときに出ます"]
     return "\n".join(lines)
 
 
@@ -1156,7 +1312,7 @@ def cmd_daily(a) -> None:
 
 
 def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path) -> None:
-    f = cfg["fields"]
+    f = {**DEFAULT_FIELDS, **cfg["fields"]}  # 古い設定に無いフィールド名 (開始日など) は既定の名前を使う
     fields = proj.fields()
     cal = Calendar(cfg)
 
@@ -1202,6 +1358,8 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
     buffer_days, buffer_how = compute_buffer(cfg, plan_days, total if unit == "人日" else 0, var_sum)
     deadline = cal.add(planned_end, buffer_days)
 
+    item_table, item_actuals = item_rows(items, work, f, cal, today, history, est, is_done)
+
     row = None
     if today >= start:
         elapsed = cal.elapsed(start, today)
@@ -1209,8 +1367,11 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
         b = max(0.0, elapsed - p * plan_days) / buffer_days
         row = {"date": today.isoformat(), "elapsed_days": elapsed, "done": round(done, 2), "total": round(total, 2),
                "unit": unit, "progress": round(p * 100, 1), "buffer": round(b * 100, 1), "buffer_days": buffer_days,
-               "zone": fever_zone(p, b, cfg["fever_zones"]), "status": status_counts(work, f["status"], cfg["done_status"])}
+               "zone": fever_zone(p, b, cfg["fever_zones"]), "status": status_counts(work, f["status"], cfg["done_status"]),
+               "items": item_actuals}
         history = sorted([h for h in history if h["date"] != row["date"]] + [row], key=lambda h: h["date"])[-MAX_HISTORY:]
+        for h in history[:-ITEM_HISTORY_DAYS]:
+            h.pop("items", None)  # アイテム別の実績は直近の分だけ残す (本文の文字数を抑える)
     status_order = list(fields[f["status"]].get("options", {}))
     out.mkdir(parents=True, exist_ok=True)
     save(out / "fever-history.json", history)
@@ -1220,7 +1381,7 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
     # --- 3) トラッカー (ドラフト Issue) を更新。設定と履歴は「進捗率」側に保存
     if len(trackers) < len(METRICS):
         ensure_trackers(proj, f, fields, trackers)  # 作成したものは trackers に入る
-    breakdown = breakdown_md(cfg, work, items, est, is_done)
+    breakdown = items_md(item_table, f, fields) + "\n\n" + breakdown_md(cfg, work, items, est, is_done)
     cfd_table = cfd_md(history, status_order, cfg["done_status"])
     visible = (tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing)
                + "\n\n" + breakdown + ("\n\n" + cfd_table if cfd_table else ""))
