@@ -160,6 +160,55 @@ class ChartLinkTest(unittest.TestCase):
         self.assertGreaterEqual(md.count("[開く](" + self.URL + "/insights?"), 9)
 
 
+class ItemTableTest(unittest.TestCase):
+    """開始日 11/2 (月)〜完了予定日 11/13 (金) = 10 営業日。今日 11/9 (月) の朝は 5 営業日経過 → 計画 50%。"""
+    F = dict(k.DEFAULT_FIELDS)
+    TODAY = k.dt.date(2026, 11, 9)
+
+    @staticmethod
+    def issue(n, parent=None, est=None, status=None, dates=True):
+        vals = {}
+        if est is not None:
+            vals["見積 (人日)"] = est
+        if status:
+            vals["Status"] = status
+        if dates:
+            vals.update({"開始日": "2026-11-02", "完了予定日": "2026-11-13", "Action": "レビュー | 前倒し"})
+        return {"id": f"I{n}", "type": "ISSUE", "values": vals,
+                "content": {"number": n, "repository": {"nameWithOwner": "o/r"}, "title": f"課題{n}", "state": "OPEN",
+                            "url": f"https://github.com/o/r/issues/{n}", "assignees": {"nodes": [{"login": "taro"}]},
+                            "parent": {"number": parent, "repository": {"nameWithOwner": "o/r"}} if parent else None}}
+
+    def rows(self, items, history):
+        cal = k.Calendar({"schedule": {"japan_holidays": False}})
+        return k.item_rows(items, items, self.F, cal, self.TODAY, history,
+                           lambda i: i["values"].get("見積 (人日)"), lambda i: i["values"].get("Status") == "Done")
+
+    def test_plan_and_actual(self):
+        # #1 ─┬ #2 (3 人日・完了)
+        #     └ #3 ── #4 (2 人日)     #3 は途中の親なので、#1 の進捗は末端の #2 と #4 で計算 → 3 / 5 = 60%
+        items = [self.issue(1), self.issue(2, 1, 3, "Done"), self.issue(3, 1, 5), self.issue(4, 3, 2)]
+        history = [{"date": "2026-11-02", "items": {"o/r#1": 10.0}}, {"date": "2026-11-06", "items": {"o/r#1": 45.0}}]
+        rows, actuals = self.rows(items, history)
+        self.assertEqual([r["ref"] for r in rows], ["o/r#1", "o/r#3"])  # サブ Issue を持つものだけがアイテム
+        r = rows[0]
+        self.assertEqual((r["plan"], r["actual"], r["diff"]), (50.0, 60.0, 10.0))
+        self.assertEqual((r["d_plan"], r["d_actual"], r["d_need"]), (10.0, 15.0, 0.0))   # 次の朝の計画 60% − 実績 60%
+        self.assertEqual((r["w_plan"], r["w_actual"], r["w_need"]), (50.0, 50.0, 40.0))  # 5 営業日後の計画 100% − 60%
+        self.assertEqual(actuals, {"o/r#1": 60.0, "o/r#3": 0.0})
+
+    def test_markdown(self):
+        items = [self.issue(1), self.issue(2, 1, 3, "Done"), self.issue(5, dates=False), self.issue(6, 5, 1)]
+        rows, _ = self.rows(items, [])
+        fields = {n: {} for n in self.F.values()}
+        md = k.items_md(rows, self.F, fields)
+        self.assertIn("| 1 | [#1](https://github.com/o/r/issues/1) 課題1 | @taro | 2026-11-02 | 2026-11-13 | 50.0% | 100.0% | 🟢 +50.0 |", md)
+        self.assertIn("レビュー \\| 前倒し", md)  # 表を壊さない
+        self.assertIn("日付が未入力", md)       # #5 は日付なし
+        self.assertNotIn("⚠️", md)
+        self.assertIn("⚠️", k.items_md(rows, self.F, {}))  # フィールドが無ければ setup の再実行を案内
+
+
 class CreateTest(unittest.TestCase):
     def args(self, **kw):
         import argparse
