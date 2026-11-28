@@ -18,6 +18,7 @@
   - [5.1. セットアップ (`mode: setup`)](#51-セットアップ-mode-setup)
   - [5.2. 毎朝の更新 (`mode: daily`)](#52-毎朝の更新-mode-daily)
   - [5.3. 図を見る](#53-図を見る)
+  - [5.4. テンプレートから新しい Project を作る (`mode: template` / `mode: create`)](#54-テンプレートから新しい-project-を作る-mode-template--mode-create)
 - [6. アクティビティ図](#6-アクティビティ図)
   - [6.1. ワークフローのジョブ](#61-ワークフローのジョブ)
   - [6.2. 毎朝の計算 (`run_daily`)](#62-毎朝の計算-run_daily)
@@ -123,7 +124,14 @@ classDiagram
         +cmd_check_token(a)
         +cmd_setup(a)
         +cmd_daily(a)
+        +cmd_template(a)
+        +cmd_create(a)
         +run_daily(proj, cfg, history, today, out)
+        +setup_inputs(a) tuple
+        +ensure_kit_fields(proj, names, cadence, ...) tuple
+        +copy_project(template, title) str
+        +find_project_by_title(owner, owner_type, title) str
+        +wait_for_fields(proj, expected)
     }
 
     class Trackers {
@@ -339,26 +347,79 @@ sequenceDiagram
     F-->>U: SVG をブラウザに表示 (image/svg+xml・inline)
 ```
 
+### 5.4. テンプレートから新しい Project を作る (`mode: template` / `mode: create`)
+
+Insights のチャートを作る API は GitHub に無いため、チャートは人がテンプレートに 1 回だけ保存し、
+`copyProjectV2` でテンプレートごとコピーします (コピーにはフィールド・ビュー・Insights のチャートが含まれ、チャートはコピー先のフィールドを指すようになります)。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor U as 利用者
+    participant A as GitHub Actions
+    participant K as insights_kit.py
+    participant G as GitHub API
+    participant T as テンプレートの Project
+    participant N as 新しい Project
+
+    rect rgba(128, 128, 128, 0.1)
+    Note over U,T: 準備 (最初の 1 回だけ)
+    U->>A: Run workflow (mode: template)
+    A->>K: template --template-url
+    K->>G: ensure_kit_fields (cadence なし: 見積・Fever などのフィールド)
+    G->>T: フィールド追加
+    K->>A: Summary にチャートのリンクの表
+    U->>T: リンクを開き ⋯ → Save changes to new chart (チャートを保存)
+    end
+
+    Note over U,N: Project を作るたび
+    U->>A: Run workflow (mode: create, project_title, 計画完了日など)
+    A->>K: create --template-url --title ...
+    K->>K: setup_inputs (日付などを先に確かめる)
+    K->>G: find_project_by_title (同じ名前があれば止める)
+    K->>G: copyProjectV2 (includeDraftIssues: false)
+    G->>N: フィールド・ビュー・チャートをコピー
+    loop フィールドが揃うまで (最大約 60 秒)
+        K->>G: fields()
+    end
+    K->>K: cmd_setup (5.1. と同じ: Sprint・Phase の追加、トラッカー作成、run_daily)
+    K->>A: Summary に「PROJECT_URL を書き換える」案内と編集画面へのリンク
+    U->>U: PROJECT_URL を新しい Project の URL に書き換える
+```
+
 ## 6. アクティビティ図
 
 ### 6.1. ワークフローのジョブ
 
 ```mermaid
 flowchart TD
-    start([開始: スケジュール or 手動]) --> chk{PROJECT_URL が<br/>YOUR-ORG のまま?}
+    start([開始: スケジュール or 手動]) --> tm{mode が<br/>create / template?}
+    tm -- はい --> tu{TEMPLATE_URL<br/>がある?}
+    tu -- いいえ --> err([エラーで終了])
+    tu -- はい --> tok
+    tm -- いいえ --> chk{PROJECT_URL が<br/>YOUR-ORG のまま?}
     chk -- はい --> skip([通知を出して終了])
     chk -- いいえ --> tok{Secret<br/>PROJECT_TOKEN がある?}
-    tok -- いいえ --> err([エラーで終了])
+    tok -- いいえ --> err
     tok -- はい --> co[checkout<br/>.github/insights-kit だけ・認証情報を残さない]
     co --> ct[check-token]
     ct --> mode{mode}
-    mode -- setup --> end1{planned_end_date<br/>がある?}
+    mode -- "setup / create" --> end1{planned_end_date<br/>がある?}
     end1 -- いいえ --> err
-    end1 -- はい --> setup[insights_kit.py setup]
+    end1 -- はい --> sc{mode}
+    sc -- setup --> setup[insights_kit.py setup]
+    sc -- create --> ti{project_title<br/>がある?}
+    ti -- いいえ --> err
+    ti -- はい --> create[insights_kit.py create<br/>テンプレートをコピー → setup]
+    mode -- template --> tmpl[insights_kit.py template<br/>フィールド追加とチャートのリンク]
     mode -- daily --> daily[insights_kit.py daily]
-    setup --> up[upload-artifact<br/>zip: fever-chart]
+    setup --> up{out/ に<br/>ファイルがある?}
+    create --> up
     daily --> up
-    up --> svg[upload-artifact<br/>fever-chart.svg / cfd.svg を zip にせず]
+    tmpl --> up
+    up -- はい --> zip[upload-artifact<br/>zip: fever-chart]
+    up -- いいえ --> sum
+    zip --> svg[upload-artifact<br/>fever-chart.svg / cfd.svg を zip にせず]
     svg --> sum[Summary:<br/>「📈 図を開く」+ キットの Summary]
     sum --> done([終了])
 ```

@@ -19,6 +19,9 @@
   - [2.5. Insights でチャートを作る](#25-insights-でチャートを作る)
     - [2.5.1. 担当者ごと・注目 Issue ごとに見る](#251-担当者ごと注目-issue-ごとに見る)
     - [2.5.2. 累積フロー図 (CFD)](#252-累積フロー図-cfd)
+  - [2.6. テンプレートから新しい Project を作る (チャートも自動)](#26-テンプレートから新しい-project-を作る-チャートも自動)
+    - [2.6.1. テンプレートを準備する (最初の 1 回だけ)](#261-テンプレートを準備する-最初の-1-回だけ)
+    - [2.6.2. 新しい Project を作る (Project を作るたび)](#262-新しい-project-を作る-project-を作るたび)
 - [3. 図を見る場所](#3-図を見る場所)
 - [4. どこに何が保存されるか](#4-どこに何が保存されるか)
 - [5. 進め方の選び方](#5-進め方の選び方)
@@ -119,6 +122,9 @@ Project のテーブルに列が増えています。各 Issue に **楽観 / �
 
 ### 2.5. Insights でチャートを作る
 
+> Insights のチャートを作る API は GitHub に無いため、チャートは Project ごとに 1 回、画面で保存します。
+> **新しい Project を何度も作る場合は、「2.6. テンプレートから新しい Project を作る」でこの作業を省けます。**
+
 **いちばん簡単な方法**: Setup の実行結果 (Summary) の表にある **「開く」** のリンクを使います。
 
 1. 「開く」を押すと、Insights が設定済みのチャートの状態で開きます (左の既定のチャート **Burn up** に設定が付いた状態)
@@ -186,6 +192,39 @@ Insights では Status ごとの帯を時系列に積み上げられない (Time
   - 一番下の完了の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたら、スコープが増えています
 
 以上で完了です。以後は平日 09:00 (日本時間) に自動更新されます。
+
+### 2.6. テンプレートから新しい Project を作る (チャートも自動)
+
+チャートを保存しておいた「テンプレート (ひな形)」の Project をコピーすると、**Insights のチャートもフィールドもコピーされた新しい Project** ができます
+(試験用の Project で、コピーしたチャートが新しい Project のデータで表示されることを確認しています)。
+キットの `mode: create` が、コピーから設定 (mode: setup と同じ) までを行います。
+
+| | いつ | すること |
+|---|---|---|
+| **準備** | 最初の 1 回だけ | テンプレートの Project を作り、チャートを保存する |
+| **作成** | Project を作るたび | `mode: create` で実行し、`PROJECT_URL` を書き換える |
+
+#### 2.6.1. テンプレートを準備する (最初の 1 回だけ)
+
+1. Organization に空の Project を作る (例: 「Insights Kit テンプレート」)。Project の Status を流れの順 (例: Todo → In Progress → In Review → Done) にそろえておく
+2. ワークフローの `TEMPLATE_URL` を、そのテンプレートの URL に書き換える ([setup.html](setup.html) の「テンプレートの Project の URL」に入れると書き込み済みになります)
+3. **Actions → Insights Kit → Run workflow** で **mode: template** を選んで実行する。テンプレートに、キットのフィールド (見積・Fever など) が追加されます
+4. 実行結果の Summary の表の「開く」を順に開き、2.5. と同じ手順 (⋯ → **Save changes to new chart** → 名前を付ける) でテンプレートにチャートを保存する
+5. (任意) テンプレートの **Settings → Make template** で、Organization のテンプレートとして登録する
+
+スプリント・工程・注目 Issue のチャートは Project ごとに中身が違うため、テンプレートには入れません (作成後の Summary にリンクが出ます)。
+
+#### 2.6.2. 新しい Project を作る (Project を作るたび)
+
+1. **Run workflow** で **mode: create** を選び、**project_title** (新しい Project の名前) と **planned_end_date** (計画完了日) などを入れて実行する
+   (入力は mode: setup と同じです)
+2. 新しい Project が作られ、チャートとフィールドがコピーされ、トラッカーなどの設定まで済みます。Issue は、作った Project に追加してください
+3. 実行結果の Summary の案内に従って、ワークフローの `PROJECT_URL` を新しい Project の URL に書き換える (Summary の「ワークフローを編集する」から開けます)。
+   これで毎朝の自動更新の対象になります
+
+- 同じ名前の Project がすでにあるときは、作らずに止まります (二重に作らないため)
+- コピーされるのは、テンプレートのフィールド・ビュー・Insights のチャートです。テンプレートの Issue とドラフトはコピーしません
+- トークンに必要な権限は「9.3.」の最後を見てください
 
 ## 3. 図を見る場所
 
@@ -295,6 +334,7 @@ GitHub の画面上は「Organization permissions」の欄に入っています�
 | `addProjectV2DraftIssue` | setup のときだけ | 設定と履歴を保存するドラフト Issue「📈 Fever: …」を 2 件追加 |
 | `updateProjectV2DraftIssue` | 毎朝 | 上のドラフト Issue の本文 (設定と履歴) を更新 |
 | `updateProjectV2ItemFieldValue` | 毎朝 | 各 Issue の「見積 (人日)」と、フィーバーの値を書き込む |
+| `copyProjectV2` | mode: create のときだけ | テンプレートの Project をコピーして、新しい Project を 1 つ作る (同じ名前の Project があれば作らない) |
 
 既存 Issue のタイトル・本文・状態の変更、フィールドやアイテム・Project の削除は行いません。
 
@@ -307,6 +347,11 @@ fine-grained トークンの Projects 権限は、Project 単位では絞れま�
 2. 対象 Project の **Settings → Manage access** で、そのアカウントに **Write** を付ける (ほかの Project には付けない)
 3. 対象の Issue があるリポジトリには **Read** だけを付ける
 4. そのアカウントで、上の手順 2.2. のとおりトークンを作る (Only select repositories・短い有効期限・Projects / Issues / Pull requests 以外の権限なし)
+
+テンプレートから新しい Project を作る (mode: create) 場合は、そのアカウントに **テンプレートの Project の Read** と、
+**Organization で Project を作る権限** (Organization の設定で、メンバーが Project を作れること) も必要です。
+作った Project は、そのアカウントが作成者 (Admin) になります。
+新しい Project を作るのは人が行い、キットは後付け (mode: setup) だけに使う運用にすれば、この権限は不要です。
 
 ### 9.4. そのほか確認しておくとよい点
 

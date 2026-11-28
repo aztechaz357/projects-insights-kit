@@ -1,5 +1,6 @@
 # Projects Insights Kit (このファイルと .github/insights-kit/insights_kit.py をコピーして使う)
 # PROJECT_URL を対象 Project の URL に書き換える。平日 09:00 (日本時間) に自動更新
+# テンプレートから新しい Project を作る場合は TEMPLATE_URL も書き換える (mode: template / create)
 # 外部のコード・サービスは使わない (通信先は GitHub のみ)。リポジトリには何も書き込まない
 name: Insights Kit
 
@@ -9,30 +10,32 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "daily=いますぐ更新 / setup=初回設定・設定変更"
+        description: "daily=いますぐ更新 / setup=初回設定・設定変更 / create=テンプレートから新しい Project を作る / template=テンプレートの準備"
         type: choice
-        options: [daily, setup]
+        options: [daily, setup, create, template]
         default: daily
+      project_title:
+        description: "[create] 新しい Project の名前"
       planned_end_date:
-        description: "[setup] 計画完了日 (バッファを含まない) YYYY-MM-DD"
+        description: "[setup・create] 計画完了日 (バッファを含まない) YYYY-MM-DD"
       start_date:
-        description: "[setup] 開始日 YYYY-MM-DD (空=今日)"
+        description: "[setup・create] 開始日 YYYY-MM-DD (空=今日)"
       buffer:
-        description: "[setup] バッファ: auto=三点見積から / 数字=営業日数"
+        description: "[setup・create] バッファ: auto=三点見積から / 数字=営業日数"
         default: auto
       cadence:
-        description: "[setup] 進め方"
+        description: "[setup・create] 進め方"
         type: choice
         options: [phase+sprint-2w, sprint-2w, sprint-1w, phase, none]
         default: phase+sprint-2w
       estimate_field:
-        description: "[setup] 既存の見積フィールド名 (空=新しく作る)"
+        description: "[setup・create] 既存の見積フィールド名 (空=新しく作る)"
       japan_holidays:
-        description: "[setup] 日本の祝日を除外する"
+        description: "[setup・create] 日本の祝日を除外する"
         type: boolean
         default: true
       focus_issues:
-        description: "[setup] 注目 Issue (例: acme/portal#12, acme/portal#30。空=前回のまま)"
+        description: "[setup・create] 注目 Issue (例: acme/portal#12, acme/portal#30。空=前回のまま)"
 
 permissions:
   contents: read
@@ -42,9 +45,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PROJECT_URL: "https://github.com/orgs/YOUR-ORG/projects/1"
+      # チャートを保存したテンプレートの Project (任意)。mode: create でこれをコピーして新しい Project を作る
+      TEMPLATE_URL: ""
       GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
       # 入力値は env 経由で渡す (スクリプトインジェクション対策)
       IN_MODE: ${{ inputs.mode || 'daily' }}
+      IN_TITLE: ${{ inputs.project_title }}
       IN_END: ${{ inputs.planned_end_date }}
       IN_START: ${{ inputs.start_date }}
       IN_BUFFER: ${{ inputs.buffer || 'auto' }}
@@ -56,7 +62,9 @@ jobs:
       - name: Check
         id: check
         run: |
-          if [[ "$PROJECT_URL" == *YOUR-ORG* ]]; then
+          if [ "$IN_MODE" = create ] || [ "$IN_MODE" = template ]; then
+            [ -n "$TEMPLATE_URL" ] || { echo "::error::mode: $IN_MODE には TEMPLATE_URL (テンプレートの Project の URL) の設定が必要です"; exit 1; }
+          elif [[ "$PROJECT_URL" == *YOUR-ORG* ]]; then
             echo "::notice::PROJECT_URL の YOUR-ORG を書き換えてください。スキップします"; exit 0
           fi
           [ -n "$GH_TOKEN" ] || { echo "::error::Secret PROJECT_TOKEN が未登録です"; exit 1; }
@@ -75,20 +83,30 @@ jobs:
           # 図のリンクを Summary の先頭に置くため、キットの Summary はいったんファイルに書き、最後の手順で出す
           export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/kit-summary.md"
           python3 "$KIT" check-token
-          if [ "$IN_MODE" = setup ]; then
-            [ -n "$IN_END" ] || { echo "::error::setup には planned_end_date が必要です"; exit 1; }
-            a=(--project-url "$PROJECT_URL" --planned-end-date "$IN_END" --buffer "$IN_BUFFER" --cadence "$IN_CADENCE")
-            [ -n "$IN_START" ] && a+=(--start-date "$IN_START")
-            [ -n "$IN_EST" ] && a+=(--estimate-field "$IN_EST")
-            [ -n "$IN_FOCUS" ] && a+=(--focus-issues "$IN_FOCUS")
-            [ "$IN_JPH" = true ] || a+=(--no-japan-holidays)
-            python3 "$KIT" setup "${a[@]}" --out out
-          else
-            python3 "$KIT" daily --project-url "$PROJECT_URL" --out out
-          fi
+          case "$IN_MODE" in
+            setup|create)
+              [ -n "$IN_END" ] || { echo "::error::$IN_MODE には planned_end_date が必要です"; exit 1; }
+              a=(--planned-end-date "$IN_END" --buffer "$IN_BUFFER" --cadence "$IN_CADENCE")
+              [ -n "$IN_START" ] && a+=(--start-date "$IN_START")
+              [ -n "$IN_EST" ] && a+=(--estimate-field "$IN_EST")
+              [ -n "$IN_FOCUS" ] && a+=(--focus-issues "$IN_FOCUS")
+              [ "$IN_JPH" = true ] || a+=(--no-japan-holidays)
+              if [ "$IN_MODE" = setup ]; then
+                python3 "$KIT" setup --project-url "$PROJECT_URL" "${a[@]}" --out out
+              else
+                [ -n "$IN_TITLE" ] || { echo "::error::create には project_title (新しい Project の名前) が必要です"; exit 1; }
+                python3 "$KIT" create --template-url "$TEMPLATE_URL" --title "$IN_TITLE" "${a[@]}" --out out
+              fi ;;
+            template)
+              t=(--template-url "$TEMPLATE_URL")
+              [ -n "$IN_EST" ] && t+=(--estimate-field "$IN_EST")
+              python3 "$KIT" template "${t[@]}" ;;
+            *)
+              python3 "$KIT" daily --project-url "$PROJECT_URL" --out out ;;
+          esac
 
       - uses: actions/upload-artifact@v7
-        if: steps.check.outputs.ready
+        if: steps.check.outputs.ready && hashFiles('out/**') != ''
         with:
           name: fever-chart
           path: out/
