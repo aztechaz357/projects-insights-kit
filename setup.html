@@ -1056,9 +1056,69 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
             f"| 納期 (バッファ込み) | {deadline} |\n"
             f"| PERT で見積を更新 | {updated} 件 |\n"
             f"| 見積が未入力 | {missing} 件 |\n\n"
-            "フィーバーチャート (`fever-chart.svg`) と累積フロー図 (`cfd.svg`) は、この実行結果の Artifacts からダウンロードできます。\n\n"
+            + "\n\n".join(x for x in (fever_mermaid(history, cfg["fever_zones"]),
+                                       cfd_mermaid(history, status_order, cfg["done_status"])) if x) + "\n\n"
+            "本来の形のフィーバーチャート (横軸が進捗率の `fever-chart.svg`) と累積フロー図 (`cfd.svg`) は、"
+            "この実行結果の Artifacts からダウンロードできます。\n\n"
             + breakdown + ("\n\n" + cfd_table if cfd_table else "") + "\n")
     print(f"progress={row['progress']}% buffer={row['buffer']}% zone={zone} ({row['done']}/{row['total']} {unit}), estimates updated={updated}")
+
+
+def _mermaid_num(v: float) -> str:
+    return f"{v:.1f}".rstrip("0").rstrip(".")
+
+
+def _mermaid_chart(title: str, labels: list[str], y_title: str, ymax: float, series: list[tuple[str, str, list[float]]],
+                   note: str) -> str:
+    """Mermaid の xychart (折れ線)。series = [(凡例名, 色, 値)]。xychart には凡例が無いので note に色の説明を書く。"""
+    palette = ", ".join(c for _, c, _ in series)
+    lines = ["```mermaid",
+             f'%%{{init: {{"themeVariables": {{"xyChart": {{"plotColorPalette": "{palette}"}}}}}}}}%%',
+             "xychart-beta",
+             f'    title "{title}"',
+             "    x-axis [" + ", ".join(f'"{x}"' for x in labels) + "]",
+             f'    y-axis "{y_title}" 0 --> {_mermaid_num(ymax)}']
+    lines += ["    line [" + ", ".join(_mermaid_num(v) for v in vals) + "]" for _, _, vals in series]
+    return "\n".join(lines + ["```", "", note])
+
+
+def fever_mermaid(history: list[dict], zones: dict, days: int = 30) -> str:
+    """フィーバーチャートを、日付ごとのバッファ消費率と、その日の進捗率での黄・赤の境界線として描く (Mermaid)。
+    Actions の Summary などで画像なしに見られる。Project のドラフトの画面では Mermaid が描画されないので本文には入れない。"""
+    rows = [h for h in history if "buffer" in h][-days:]
+    if not rows:
+        return ""
+
+    def zl(z, p):
+        return (z[0] + (z[1] - z[0]) * p / 100) * 100
+
+    ymax = math.ceil(max([120] + [h["buffer"] + 10 for h in rows]) / 10) * 10
+    series = [("赤ゾーンの境界", "#cf222e", [zl(zones["red"], h["progress"]) for h in rows]),
+              ("黄ゾーンの境界", "#d4a72c", [zl(zones["yellow"], h["progress"]) for h in rows]),
+              ("バッファ枯渇 (100%)", "#8c959f", [100.0] * len(rows)),
+              ("バッファ消費率", "#0969da", [h["buffer"] for h in rows])]
+    note = ("🔵 青線: バッファ消費率 / 🟡 黄線・🔴 赤線: その日の進捗率でのゾーンの境界 (青線がこれを超えると黄・赤) / "
+            "灰線: バッファ枯渇 (納期遅延)")
+    return _mermaid_chart("フィーバー: バッファ消費率の推移 (%)", [h["date"][5:] for h in rows], "バッファ消費率 (%)",
+                          ymax, series, note)
+
+
+def cfd_mermaid(history: list[dict], status_order: list[str], done_status: list[str], days: int = 30) -> str:
+    """CFD を、積み上げの境界線 (下から累計した件数) の折れ線として描く (Mermaid には積み上げ面グラフが無いため)。"""
+    rows = [h for h in history if h.get("status")][-days:]
+    if not rows:
+        return ""
+    bands = cfd_bands(rows, status_order, done_status)
+    series, acc = [], [0] * len(rows)
+    for bi, band in enumerate(bands):
+        acc = [acc[i] + rows[i]["status"].get(band, 0) for i in range(len(rows))]
+        color = "#afb8c1" if band == NO_STATUS else CFD_COLORS[bi % len(CFD_COLORS)]
+        series.append((band, color, list(acc)))
+    ymax = max(1, math.ceil(max(acc) * 1.1))
+    marks = {"#2da44e": "🟢", "#0969da": "🔵", "#8250df": "🟣", "#bf3989": "🔴", "#bc4c00": "🟠", "#afb8c1": "⚪"}
+    note = ("線は下から積み上げた件数の上端です (線と線の間がその Status の件数)。 " +
+            " / ".join(f"{marks.get(c, '■')} {b} まで" for b, c, _ in series))
+    return _mermaid_chart("累積フロー図 (CFD・件数)", [h["date"][5:] for h in rows], "件数", ymax, series, note)
 
 
 def state_body(visible: str, stored_cfg: dict, history: list[dict]) -> str:
