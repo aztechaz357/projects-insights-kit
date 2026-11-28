@@ -572,7 +572,7 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None, fields: dict |
               "",
               "### 累積フロー図 (CFD)",
               "Insights では Status ごとの帯を時系列に積み上げられないため、CFD はキットが描きます。",
-              "毎朝 Status ごとの件数を記録し、実行結果の **Artifacts** (`cfd.svg`) と「📈 Fever: 進捗率」の本文の表に出します。",
+              "毎朝 Status ごとの件数を記録し、Actions の実行結果の Summary の「📈 図を開く」(`cfd.svg`) と「📈 Fever: 進捗率」の本文の表に出します。",
               "- 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら滞留しています",
               "- 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)",
               "- 一番下の完了の帯の **増え方** = 完了のペース。全体の高さが増え続けていたらスコープが増えています",
@@ -826,8 +826,8 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
             f"| 見積が未入力 | {missing} 件 |\n\n"
             + "\n\n".join(x for x in (fever_mermaid(history, cfg["fever_zones"]),
                                        cfd_mermaid(history, status_order, cfg["done_status"])) if x) + "\n\n"
-            "本来の形のフィーバーチャート (横軸が進捗率の `fever-chart.svg`) と累積フロー図 (`cfd.svg`) は、"
-            "この実行結果の Artifacts からダウンロードできます。\n\n"
+            "上の折れ線は日付ごとの簡易版です。塗り分けた本来の形の図 (横軸が進捗率のフィーバーチャートと、帯の累積フロー図) は、"
+            "この Summary の一番上の「📈 図を開く」のリンクからブラウザで開けます。\n\n"
             + breakdown + ("\n\n" + cfd_table if cfd_table else "") + "\n")
     print(f"progress={row['progress']}% buffer={row['buffer']}% zone={zone} ({row['done']}/{row['total']} {unit}), estimates updated={updated}")
 
@@ -921,7 +921,7 @@ def cfd_md(history: list[dict], status_order: list[str], done_status: list[str],
         return ""
     cols = list(reversed(cfd_bands(rows, status_order, done_status)))  # 表は流れの順 (Todo → … → Done)
     lines = [f"### 📊 累積フロー図 (CFD) の元データ (直近 {len(rows)} 日・件数)", "",
-             "図は実行結果の Artifacts の `cfd.svg` にあります。", "",
+             "図は Actions の実行結果の Summary の「📈 図を開く」から開けます (`cfd.svg`)。", "",
              "| 日付 | " + " | ".join(c.replace("|", "\\|") for c in cols) + " | 合計 |",
              "|---|" + "---:|" * (len(cols) + 1)]
     for h in rows:
