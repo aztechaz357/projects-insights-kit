@@ -94,6 +94,30 @@ class RecipeTest(unittest.TestCase):
         self.assertIn("Parent issue", md)
 
 
+class MermaidTest(unittest.TestCase):
+    ZONES = {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}
+
+    def test_fever_lines_follow_progress(self):
+        hist = [{"date": "2026-11-26", "progress": 50.0, "buffer": 40.0},
+                {"date": "2026-11-27", "progress": 100.0, "buffer": 130.0}]
+        md = k.fever_mermaid(hist, self.ZONES)
+        self.assertTrue(md.startswith("```mermaid\n"))
+        self.assertIn('x-axis ["11-26", "11-27"]', md)
+        self.assertIn("y-axis \"バッファ消費率 (%)\" 0 --> 140", md)  # 最大値 + 10 を 10 単位で切り上げ
+        self.assertIn("line [60, 90]", md)   # 赤: 30% → 90% を進捗率で補間
+        self.assertIn("line [40, 70]", md)   # 黄
+        self.assertIn("line [100, 100]", md)
+        self.assertIn("line [40, 130]", md)  # 実際の消費率
+        self.assertEqual(k.fever_mermaid([], self.ZONES), "")
+
+    def test_cfd_lines_are_cumulative_from_done(self):
+        hist = [{"date": "2026-11-27", "status": {"Todo": 4, "In Progress": 2, "Done": 3}}]
+        md = k.cfd_mermaid(hist, ["Todo", "In Progress", "Done"], ["Done"])
+        lines = [l.strip() for l in md.splitlines() if l.strip().startswith("line [")]
+        self.assertEqual(lines, ["line [3]", "line [5]", "line [9]"])  # Done → +In Progress → +Todo
+        self.assertEqual(k.cfd_mermaid([{"date": "2026-11-27"}], ["Todo"], ["Done"]), "")
+
+
 class ChartLinkTest(unittest.TestCase):
     URL = "https://github.com/users/acme/projects/7"
     FIELDS = {"Status": {"db": 11}, "Assignees": {"db": 12}, "Parent issue": {"db": 13},
