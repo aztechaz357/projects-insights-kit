@@ -94,5 +94,47 @@ class RecipeTest(unittest.TestCase):
         self.assertIn("Parent issue", md)
 
 
+class ChartLinkTest(unittest.TestCase):
+    URL = "https://github.com/users/acme/projects/7"
+    FIELDS = {"Status": {"db": 11}, "Assignees": {"db": 12}, "Parent issue": {"db": 13},
+              "見積 (人日)": {"db": 21}, "Fever Value": {"db": 22}, "Fever Zone": {"db": 23}, "Fever Metric": {"db": 24}}
+
+    def params(self, row):
+        import urllib.parse
+        link = k.chart_link(self.URL, row, self.FIELDS, "Status")
+        self.assertTrue(link.startswith(self.URL + "/insights?"), link)
+        return dict(urllib.parse.parse_qsl(link.split("?", 1)[1], keep_blank_values=True))
+
+    def test_time_chart_uses_status_as_group(self):
+        p = self.params(("バーンアップ", "`no:fever-metric`", "Stacked area", "Time", "(選べない)", "Sum of 見積 (人日)"))
+        self.assertEqual(p, {"xAxis[dataSource][column]": "time", "xAxis[groupBy]": "11",
+                             "yAxis[aggregate][operation]": "sum", "yAxis[aggregate][columns]": "21",
+                             "filterQuery": "no:fever-metric", "layout": "stacked-area"})
+
+    def test_field_chart_with_and_without_group(self):
+        p = self.params(("担当者別", "`-status:Done`", "Stacked column", "Assignees", "Status", "Sum of 見積 (人日)"))
+        self.assertEqual((p["xAxis[dataSource][column]"], p["xAxis[groupBy]"], p["layout"]), ("12", "11", "stacked-column"))
+        p = self.params(("ゾーン", "`has:fever-metric`", "Bar", "Fever Zone", "None", "Count of items"))
+        self.assertEqual(p["xAxis[groupBy]"], "")  # 空でも付けないと X-axis が反映されない
+        self.assertNotIn("yAxis[aggregate][operation]", p)
+
+    def test_filter_with_quotes_and_percent(self):
+        p = self.params(("進捗率", '`fever-metric:"Progress %"`', "Line", "Time", "(選べない)", "Sum of Fever Value"))
+        self.assertEqual(p["filterQuery"], 'fever-metric:"Progress %"')
+
+    def test_no_link_for_placeholder_or_missing_field(self):
+        self.assertIsNone(k.chart_link(self.URL, ("注目", "`parent-issue:OWNER/REPO#番号`", "Line", "Time", "-", "Sum of 見積 (人日)"),
+                                       self.FIELDS, "Status"))
+        self.assertIsNone(k.chart_link(self.URL, ("工程", "`x`", "Stacked column", "Phase", "Status", "Count of items"),
+                                       self.FIELDS, "Status"))
+
+    def test_recipe_has_links_when_fields_given(self):
+        cfg = {"fields": k.DEFAULT_FIELDS, "cadence": "sprint-2w", "focus_issues": [], "project": {"url": self.URL}}
+        fields = dict(self.FIELDS, Sprint={"db": 31})
+        md = k.insights_recipe(cfg, ["Todo", "Done"], fields)
+        self.assertIn("Save changes to new chart", md)
+        self.assertGreaterEqual(md.count("[開く](" + self.URL + "/insights?"), 9)
+
+
 if __name__ == "__main__":
     unittest.main()

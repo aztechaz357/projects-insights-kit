@@ -33,7 +33,8 @@ class SelfContainedTest(unittest.TestCase):
 
     def test_kit_talks_only_to_github(self):
         src = (ROOT / ".github" / "insights-kit" / "insights_kit.py").read_text(encoding="utf-8")
-        for bad in ("urllib", "http.client", "requests", "socket", "curl", "wget"):
+        # urllib.parse (URL の組み立てだけで通信しない) は可
+        for bad in ("urllib.request", "urlopen", "http.client", "requests", "socket", "curl", "wget"):
             self.assertNotIn(bad, src, f"insights_kit.py が {bad} を使っています")
         hosts = {h for h in re.findall(r"https?://([^/\s\"'`]+)", src)}
         self.assertLessEqual(hosts, {"github.com", "www.w3.org"}, hosts)

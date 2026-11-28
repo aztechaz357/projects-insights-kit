@@ -93,7 +93,15 @@ Project のテーブルに列が増えています。各 Issue に **楽観 / �
 
 ### 5. Insights でチャートを作る
 
-Project 右上の **Insights → New chart** で作り、**Filter** はグラフ上の入力欄、それ以外は **Configure** で設定して **Save** します。
+**いちばん簡単な方法**: Setup の実行結果 (Summary) の表にある **「開く」** のリンクを使います。
+
+1. 「開く」を押すと、Insights が設定済みのチャートの状態で開きます (左の既定のチャート **Burn up** に設定が付いた状態)
+2. 左の **Burn up** の横の **⋯** → **Save changes to new chart** を押すと、新しいチャートとして保存されます
+3. グラフ名の横の鉛筆で、名前を付けます (例: バーンアップ)
+
+リンクには Project のフィールドの ID が入るため、Project ごとに Setup の Summary に出るものを使ってください。
+
+手で作るときは、Project 右上の **Insights → New chart** で作り、**Filter** はグラフ上の入力欄、それ以外は **Configure** で下の表のとおりに設定して **Save** します。
 (見積フィールド名を変えた場合は、Setup の Summary に出る表を使ってください。)
 
 | チャート | Filter | Layout | X-axis | Group by | Y-axis |
