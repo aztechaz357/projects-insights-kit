@@ -19,6 +19,7 @@
   - [5.2. 毎朝の更新 (`mode: daily`)](#52-毎朝の更新-mode-daily)
   - [5.3. 図を見る](#53-図を見る)
   - [5.4. テンプレートから新しい Project を作る (`mode: template` / `mode: create`)](#54-テンプレートから新しい-project-を作る-mode-template--mode-create)
+  - [5.5. 過去の進捗表を SharePoint に残す (`csv-download/Get-InsightsKitCsv.ps1`)](#55-過去の進捗表を-sharepoint-に残す-csv-downloadget-insightskitcsvps1)
 - [6. アクティビティ図](#6-アクティビティ図)
   - [6.1. ワークフローのジョブ](#61-ワークフローのジョブ)
   - [6.2. 毎朝の計算 (`run_daily`)](#62-毎朝の計算-run_daily)
@@ -47,18 +48,24 @@ flowchart LR
 
     subgraph Actions["GitHub Actions (ランナー)"]
         JOB["ジョブ run<br/>(平日 09:00 JST / 手動)"]
-        OUT[("out/<br/>fever-chart.svg<br/>cfd.svg<br/>fever-history.json")]
+        OUT[("out/<br/>fever-chart.svg<br/>cfd.svg<br/>item-progress-日付.csv<br/>fever-history.json")]
     end
 
     subgraph GitHub["GitHub (保存先)"]
         API["GitHub GraphQL API"]
         PRJ["Project<br/>(Issue・フィールド・Insights)"]
         DRAFT["ドラフト Issue<br/>📈 Fever: 進捗率 / バッファ消費率<br/>(設定 JSON・履歴)"]
-        ART["Artifacts<br/>(SVG・zip、30 日)"]
+        ART["Artifacts<br/>(SVG・CSV・zip、30 日)"]
         SUM["実行結果の Summary"]
     end
 
     USER(("利用者"))
+
+    subgraph Company["社内 (任意)"]
+        PC["Windows PC<br/>Get-InsightsKitCsv.ps1<br/>(タスク スケジューラ 平日 9:30)"]
+        SP[("SharePoint<br/>(OneDrive で同期したフォルダ)")]
+        FS[("サーバーの共有フォルダ")]
+    end
 
     WF --> JOB
     KIT --> JOB
@@ -72,6 +79,9 @@ flowchart LR
     USER -- "Insights を見る" --> PRJ
     USER -- "📈 図を開く" --> SUM
     SUM -. リンク .-> ART
+    PC -- "CSV を取りに行く<br/>(Actions: Read-only のトークン)" --> ART
+    PC --> SP
+    PC -.-> FS
 ```
 
 ### 2.1. 何をどこで見るか
@@ -85,6 +95,7 @@ flowchart LR
 | 簡易版の折れ線 | `fever_mermaid` / `cfd_mermaid` (Mermaid) | Summary の下の方 |
 | 数字の表 | `tracker_body` / `breakdown_md` / `cfd_md` | ドラフト「📈 Fever: 進捗率」の本文と Summary |
 | アイテム (親 Issue) 別の進捗表 | `item_rows` → `items_md` | ドラフト「📈 Fever: 進捗率」の本文と Summary |
+| アイテム別の進捗表 (CSV・過去の分) | `items_csv` → Artifacts → 社内 PC の `Get-InsightsKitCsv.ps1` | Summary の「📈 図を開く」、SharePoint・サーバーのフォルダ |
 
 ## 3. クラス図
 
@@ -160,6 +171,7 @@ classDiagram
         +breakdown_md(cfg, work, items, est, is_done) str
         +item_rows(items, work, f, cal, today, history, est, is_done) tuple
         +items_md(rows, f, fields) str
+        +items_csv(path, rows, today)
         +linear_plan(cal, start, due, day) float
         +cfd_md(history, order, done) str
         +insights_recipe(cfg, statuses, fields) str
@@ -393,6 +405,38 @@ sequenceDiagram
     U->>U: PROJECT_URL を新しい Project の URL に書き換える
 ```
 
+### 5.5. 過去の進捗表を SharePoint に残す (`csv-download/Get-InsightsKitCsv.ps1`)
+
+社内の PC から GitHub に取りに行く形にしています。GitHub から社内へは何も送らないので、キットの通信先は GitHub だけのままです。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as GitHub Actions
+    participant F as Artifacts
+    participant T as タスク スケジューラ (社内 PC)
+    participant P as Get-InsightsKitCsv.ps1
+    participant G as GitHub API
+    participant S as 保存先フォルダ<br/>(SharePoint の同期フォルダ・サーバー)
+    participant O as OneDrive
+
+    A->>F: item-progress-日付.csv (zip にしない・30 日)
+    T->>P: 平日 9:30 に起動
+    P->>P: 暗号化したトークンを読む (DPAPI)
+    P->>G: GET /repos/{repo}/actions/artifacts
+    G-->>P: CSV の一覧 (同じ日が複数あれば最後の実行の分)
+    loop 保存先にまだ無い日の CSV
+        P->>G: GET .../artifacts/{id}/zip (トークン付き)
+        G-->>P: 302 一時的なダウンロード URL
+        P->>F: GET (トークンは送らない)
+        F-->>P: CSV
+        P->>S: 保存 (既存のファイルは上書きしない)
+    end
+    P->>P: ログに記録 (insights-kit-csv.log)
+    S->>O: 同期フォルダの変更
+    O->>O: SharePoint にアップロード
+```
+
 ## 6. アクティビティ図
 
 ### 6.1. ワークフローのジョブ
@@ -491,5 +535,5 @@ flowchart LR
 
 | テスト | 確認すること |
 |---|---|
-| `test_setup_html.py` | setup.html の埋め込みが元のファイルと一致する。GitHub 公式以外のアクションや別リポジトリを使っていない。通信のライブラリを使わず、URL が GitHub だけ。日本の祝日の計算 |
-| `test_kit.py` | CFD の集計と帯の順番、SVG が壊れていない、本文の文字数の上限、Insights のチャート設定表とリンク、Mermaid の図の値、アイテム別の進捗表の計算、create の入力チェック |
+| `test_setup_html.py` | setup.html の埋め込みが元のファイルと一致する。GitHub 公式以外のアクションや別リポジトリを使っていない。通信のライブラリを使わず、URL が GitHub だけ。社内 PC 用の CSV 取得スクリプトも通信先が GitHub だけで BOM 付き。日本の祝日の計算 |
+| `test_kit.py` | CFD の集計と帯の順番、SVG が壊れていない、本文の文字数の上限、Insights のチャート設定表とリンク、Mermaid の図の値、アイテム別の進捗表の計算と CSV (Excel の数式にならないこと)、create の入力チェック |

@@ -208,6 +208,22 @@ class ItemTableTest(unittest.TestCase):
         self.assertNotIn("⚠️", md)
         self.assertIn("⚠️", k.items_md(rows, self.F, {}))  # フィールドが無ければ setup の再実行を案内
 
+    def test_csv(self):
+        import csv as csvmod
+        items = [self.issue(1), self.issue(2, 1, 3, "Done")]
+        items[0]["values"]["Action"] = "=HYPERLINK(\"x\")"  # Excel の数式として実行させない
+        rows, _ = self.rows(items, [])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "item-progress-2026-11-09.csv"
+            k.items_csv(path, rows, self.TODAY)
+            self.assertTrue(path.read_bytes().startswith(b"\xef\xbb\xbf"))  # Excel 用に BOM 付き
+            with open(path, encoding="utf-8-sig", newline="") as fp:
+                data = list(csvmod.DictReader(fp))
+        self.assertEqual(list(data[0]), k.ITEM_CSV_COLUMNS)
+        self.assertEqual((data[0]["日付"], data[0]["アイテム"], data[0]["累計 計画 (%)"], data[0]["累計 実績 (%)"]),
+                         ("2026-11-09", "o/r#1", "50.0", "100.0"))
+        self.assertEqual(data[0]["Action"], "'=HYPERLINK(\"x\")")
+
 
 class CreateTest(unittest.TestCase):
     def args(self, **kw):

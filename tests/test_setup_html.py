@@ -39,6 +39,16 @@ class SelfContainedTest(unittest.TestCase):
         hosts = {h for h in re.findall(r"https?://([^/\s\"'`]+)", src)}
         self.assertLessEqual(hosts, {"github.com", "www.w3.org"}, hosts)
 
+    def test_csv_download_script(self):
+        """社内 PC で動かす取得スクリプトも、通信先は GitHub だけ。Windows PowerShell 5.1 で日本語が化けないよう BOM 付き。"""
+        path = ROOT / "csv-download" / "Get-InsightsKitCsv.ps1"
+        raw = path.read_bytes()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), "BOM 付き UTF-8 で保存してください")
+        src = raw.decode("utf-8-sig")
+        hosts = set(re.findall(r"https?://([^/\s\"'`$]+)", src))
+        self.assertEqual(hosts, {"api.github.com"}, hosts)
+        self.assertIn("ConvertFrom-SecureString", src)  # トークンは暗号化して保存する
+
     def test_japan_holidays(self):
         sys.path.insert(0, str(ROOT / ".github" / "insights-kit"))
         import insights_kit
