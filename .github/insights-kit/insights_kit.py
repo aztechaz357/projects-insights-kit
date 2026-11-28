@@ -8,13 +8,16 @@
   - フィーバーチャート: 進捗率とバッファ消費率を毎日計算し、Project のドラフト Issue と SVG に記録
 
 設定と履歴は Project 内のドラフト Issue「📈 Fever: 進捗率」の本文に保存するため、リポジトリへの書き込みは不要です。
-通常は GitHub Actions (.github/workflows/run.yml を呼ぶワークフロー) から実行します。
-手元で動かす場合は GH_TOKEN (または .env の PROJECT_TOKEN) を設定して:
+通信先は GitHub API (gh CLI 経由) だけです。外部サービスへの送信や外部コードの取得は行いません
+(日本の祝日もこのファイルの中で計算します)。標準ライブラリと gh CLI だけで動きます。
 
-  python kit/insights_kit.py setup --project-url URL --planned-end-date YYYY-MM-DD [--start-date ...] [--buffer auto|N]
+通常は GitHub Actions (.github/workflows/insights-kit.yml) から実行します。
+手元で動かす場合は GH_TOKEN (または カレントディレクトリの .env の PROJECT_TOKEN) を設定して:
+
+  python .github/insights-kit/insights_kit.py setup --project-url URL --planned-end-date YYYY-MM-DD [--start-date ...] [--buffer auto|N]
                                    [--cadence phase+sprint-2w] [--estimate-field 名前] [--no-japan-holidays]
-  python kit/insights_kit.py daily --project-url URL [--date YYYY-MM-DD]
-  python kit/insights_kit.py check-token
+  python .github/insights-kit/insights_kit.py daily --project-url URL [--date YYYY-MM-DD]
+  python .github/insights-kit/insights_kit.py check-token
 """
 from __future__ import annotations
 
@@ -26,18 +29,15 @@ import os
 import re
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-DOTENV = ROOT / ".env"
+DOTENV = Path.cwd() / ".env"
 STATE_METRIC = "Progress %"  # 設定と履歴はこのトラッカーの本文に保存
 CONFIG_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
 HISTORY_RE = re.compile(r"<!-- insights-kit:history\s*(\[.*?\])\s*-->", re.S)
 MAX_HISTORY = 400
 
 JST = dt.timezone(dt.timedelta(hours=9))
-HOLIDAY_API = "https://holidays-jp.github.io/api/v1/date.json"
 PROJECT_URL_RE = re.compile(r"github\.com/(orgs|users)/([^/]+)/projects/(\d+)")
 
 CADENCES = {
@@ -145,18 +145,55 @@ def parse_date(s: str, name: str) -> dt.date:
 
 
 # ==================================================================== calendar
+def _nth_monday(year: int, month: int, n: int) -> dt.date:
+    first = dt.date(year, month, 1)
+    return first + dt.timedelta(days=(7 - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def japan_holidays(year: int) -> set[dt.date]:
+    """日本の祝日 (国民の祝日に関する法律、2020 年以降の規定)。外部 API を使わずに計算する。
+
+    春分・秋分は 1980〜2099 年の近似式。会社独自の休日は設定の extra_holidays に入れる。
+    """
+    if year < 1980 or year > 2099:
+        return set()
+    D = lambda m, d: dt.date(year, m, d)  # noqa: E731
+    y = year - 1980
+    spring = int(20.8431 + 0.242194 * y - y // 4)
+    autumn = int(23.2488 + 0.242194 * y - y // 4)
+    hs = {D(1, 1), _nth_monday(year, 1, 2), D(2, 11), D(3, spring), D(4, 29), D(5, 3), D(5, 4), D(5, 5),
+          _nth_monday(year, 9, 3), D(9, autumn), D(11, 3), D(11, 23)}
+    if year >= 2020:
+        hs.add(D(2, 23))  # 天皇誕生日
+    # 海の日・山の日・スポーツの日 (2020/2021 は東京五輪の特例)
+    special = {2020: [D(7, 23), D(7, 24), D(8, 10)], 2021: [D(7, 22), D(7, 23), D(8, 8)]}
+    hs.update(special.get(year) or [_nth_monday(year, 7, 3), D(8, 11), _nth_monday(year, 10, 2)])
+    # 振替休日: 祝日が日曜なら、その後の最初の祝日でない日
+    for h in sorted(hs):
+        if h.weekday() == 6:
+            d = h + dt.timedelta(days=1)
+            while d in hs:
+                d += dt.timedelta(days=1)
+            hs.add(d)
+    # 国民の休日: 前後を祝日に挟まれた平日
+    for h in sorted(hs):
+        d = h + dt.timedelta(days=1)
+        if d not in hs and d + dt.timedelta(days=1) in hs and d.weekday() != 6:
+            hs.add(d)
+    return hs
+
+
 class Calendar:
     def __init__(self, cfg: dict):
         sch = cfg["schedule"]
         self.holidays: set[str] = set(sch.get("extra_holidays", []))
-        if sch.get("japan_holidays", True):
-            try:
-                with urllib.request.urlopen(HOLIDAY_API, timeout=15) as r:
-                    self.holidays |= set(json.load(r).keys())
-            except Exception as e:  # noqa: BLE001
-                warn(f"祝日データを取得できませんでした ({e})。土日のみ除外して計算します")
+        self.japan = bool(sch.get("japan_holidays", True))
+        self._jp_years: set[int] = set()
 
     def is_bday(self, d: dt.date) -> bool:
+        if self.japan and d.year not in self._jp_years:
+            self._jp_years.add(d.year)
+            self.holidays |= {h.isoformat() for h in japan_holidays(d.year)}
         return d.weekday() < 5 and d.isoformat() not in self.holidays
 
     def count(self, start: dt.date, end: dt.date) -> int:

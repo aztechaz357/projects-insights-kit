@@ -1,8 +1,21 @@
 # Projects Insights Kit
 
 **すでに Issue が入っている GitHub Project** に、次の3つを後付けします。
-**既存のリポジトリにワークフローのファイルを1つ置くだけ**で動き、操作はすべてブラウザで完結します。
+**既存のリポジトリに `.github/` 配下の 2 ファイルをコピーするだけ**で動き、操作はすべてブラウザで完結します。
 リポジトリには何も書き込まず、既存 Issue のタイトル・本文・状態も変更しません。
+
+> **外部に依存しません。** 実行されるのはコピーした 2 ファイルと GitHub 公式のアクション (`actions/checkout`, `actions/upload-artifact`) だけで、
+> 作者のリポジトリや外部サービスのコードを取りに行くことはありません。通信先は GitHub API のみで、Project の情報が GitHub 以外に送られることはありません
+> (日本の祝日も外部 API を使わず `insights_kit.py` の中で計算します)。コピーした時点のコードが社内のリポジトリで動くので、社内でレビューしてから使えます。
+
+## コピーするファイル
+
+| ファイル | 役割 |
+|---|---|
+| [.github/workflows/insights-kit.yml](.github/workflows/insights-kit.yml) | いつ・何を実行するか (`PROJECT_URL` を書き換える) |
+| [.github/insights-kit/insights_kit.py](.github/insights-kit/insights_kit.py) | 処理の本体 (Python 標準ライブラリ + gh CLI のみ) |
+
+`setup.html`・`tools/`・`tests/` はこのキットの配布・保守用で、コピー先には不要です。
 
 | 後付けするもの | 中身 |
 |---|---|
@@ -13,20 +26,22 @@
 ## セットアップ (所要 10 分)
 
 > **かんたんセットアップ**: [setup.html](setup.html) を開き (ファイルの画面右上の **Download raw file** で保存 → ダブルクリック)、
-> Project とリポジトリの URL を貼り付けてボタンを押すだけで、下の手順 1 のファイルが書き換え済みで作れます。手順 2 のトークン作成・Secret 登録の画面へのリンクも出ます。
+> Project とリポジトリの URL を貼り付けると、下の手順 1 の 2 ファイルを (URL を書き換え済みで) コピーしてそのまま GitHub の作成画面に貼り付けられます。手順 2 のトークン作成・Secret 登録の画面へのリンクも出ます。
 > サーバーや GitHub Pages は不要で、入力した値はどこにも送信しません。
 
-### 1. ワークフローのファイルを置く
+### 1. 2 つのファイルを置く
 
-**既存のリポジトリに入れる場合** (setup.html を使う場合は不要) (Project の Issue があるリポジトリなど、どこでも可)
+**既存のリポジトリに入れる場合** (Project の Issue があるリポジトリなど、どこでも可)
 
-1. リポジトリの **Add file → Create new file** を開く
-2. ファイル名に `.github/workflows/insights-kit.yml` と入力
-3. [insights-kit.yml](.github/workflows/insights-kit.yml) の中身をすべてコピーして貼り付け
-4. `project_url:` の行を、対象 Project の URL に書き換える (例: `https://github.com/orgs/acme/projects/5`)
-5. **Commit changes** (ブランチ保護がある場合は PR を作ってマージ)
+1. リポジトリの **Add file → Create new file** で、ファイル名 `.github/insights-kit/insights_kit.py` に
+   [insights_kit.py](.github/insights-kit/insights_kit.py) の中身をすべて貼り付けて **Commit changes**
+2. 同じように `.github/workflows/insights-kit.yml` に [insights-kit.yml](.github/workflows/insights-kit.yml) の中身を貼り付け、
+   `PROJECT_URL:` の行を対象 Project の URL に書き換えて (例: `https://github.com/orgs/acme/projects/5`) **Commit changes**
+3. ブランチ保護がある場合は PR を作ってマージ
 
-**新しくリポジトリを作る場合**: このページ右上の **Use this template** で作り、上の 4〜5 だけ行います。
+git で入れる場合は、このリポジトリの `.github/workflows/insights-kit.yml` と `.github/insights-kit/` をそのままコピーします。
+
+**新しくリポジトリを作る場合**: このリポジトリの中身をコピーして社内に新しいリポジトリを作り、上の 2 の `PROJECT_URL` の書き換えだけ行います。
 
 ### 2. トークンを作って Secret に登録する
 
@@ -140,17 +155,25 @@ Project のドラフト「📈 Fever: 進捗率」を開き、本文の「⚙️
 | `buffer_auto.k` | 自動バッファの係数 (2.0 ≒ 95%、1.0 ≒ 68%) |
 | `fields` | フィールド名 (Project 側で名前を変えたらここも合わせる。`Fever Metric` は変更しないでください) |
 
-## 会社で使うときの注意
+## 会社で使うときの注意 (情報の扱い)
 
-- `uses: aztechaz357/projects-insights-kit/...@v1` は、このリポジトリのコードを毎回取得して実行します。
-  社内ルールで外部コードを使えない場合は、このリポジトリを社内の Organization に **fork** し、
-  `insights-kit.yml` の `uses:` の行を fork 先に書き換え、`with:` に `kit_repository: <社内org>/projects-insights-kit` を追加してください。
-- 変更を固定したい場合は `@v1` をコミット SHA に置き換えます。
+- **実行されるコードはコピー先のリポジトリにあるものだけ**です。このキットの元リポジトリが後から変更されても、コピー済みのものには影響しません。
+  更新を取り込むときは、差分をレビューしてから 2 ファイルを置き換えてください。
+- **通信先は GitHub だけ**です。`insights_kit.py` は `gh` CLI で GitHub API を呼ぶ以外の通信をしません (テストで確認しています)。
+  祝日はファイル内で計算し、計測・テレメトリの類もありません。
+- 使う外部アクションは GitHub 公式の `actions/checkout` と `actions/upload-artifact` だけです。社内ルールでさらに固定したい場合は、`@v7` をコミット SHA に置き換えてください。
+- ワークフローの権限は `contents: read` のみ、checkout は `persist-credentials: false` です。トークン (Secret `PROJECT_TOKEN`) はログで伏せられ、`gh` にだけ渡されます。
+- 結果の保存先は、対象 Project 内のドラフト Issue と、そのリポジトリの Actions の Artifacts (30 日) だけです。
 
 ## よくある質問
 
 - **既存の Issue や Project が壊れませんか?** — 追加するのはフィールドとドラフト Issue 2 件だけです。書き換えるのは「見積 (人日)」(三点見積が入っている Issue のみ) と、フィーバー用のフィールドだけです。
-- **`project_url がまだ設定されていません` と出る** — `insights-kit.yml` の `YOUR-ORG` を書き換えてください。
+- **`PROJECT_URL の YOUR-ORG を書き換えてください` と出る** — `insights-kit.yml` の `PROJECT_URL:` を書き換えてください。
 - **`Resource not accessible` で失敗する** — トークンの Projects 権限、Resource owner、Organization の承認を確認してください。
-- **手元で動かしたい** — このリポジトリを clone し、`.env.example` を `.env` にコピーして `PROJECT_TOKEN` を書き、
-  `python kit/insights_kit.py daily --project-url <URL>` を実行します (gh CLI が必要)。
+- **手元で動かしたい** — `.env.example` を `.env` にコピーして `PROJECT_TOKEN` を書き、そのディレクトリで
+  `python .github/insights-kit/insights_kit.py daily --project-url <URL>` を実行します (gh CLI が必要)。
+
+## このキットを保守する人向け
+
+`insights-kit.yml` か `insights_kit.py` を変更したら、`python tools/sync_setup_html.py` で setup.html の埋め込みを更新し、
+`python -m unittest discover -s tests` で確認します (外部依存が入っていないこともテストします)。
