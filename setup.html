@@ -1054,9 +1054,12 @@ if __name__ == "__main__":
     } else if (proj.kind === "orgs") {
       $("token-how").innerHTML =
         `<a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">fine-grained トークンの作成画面</a> で、` +
-        `<b>Resource owner</b> を <code>${proj.owner}</code> にし、<b>Repository access</b> で Project の Issue があるリポジトリを選び (迷ったら All repositories)、` +
-        `<b>Organization permissions → Projects: Read and write</b>、<b>Repository permissions → Issues: Read-only</b> と <b>Pull requests: Read-only</b> を付けて Generate。` +
-        `組織の設定によっては管理者の承認が必要です。`;
+        `<b>Resource owner</b> を <code>${proj.owner}</code> にし、<b>Repository access</b> は <b>Only select repositories</b> で Project の Issue があるリポジトリだけを選び、` +
+        `<b>Organization permissions → Projects: Read and write</b>、<b>Repository permissions → Issues: Read-only</b> と <b>Pull requests: Read-only</b> だけを付けて Generate。` +
+        `組織の設定によっては管理者の承認が必要です。` +
+        `<div class="note">「Organization permissions」の欄にありますが、求めるのは <b>Projects</b> の権限だけで、組織の設定やメンバー、リポジトリへの書き込みはしません。` +
+        `会社では、キット専用のアカウントに対象 Project だけの Write を付け、そのアカウントでトークンを作ると、書き込める範囲がその Project 1 つになります。` +
+        `管理者に理由を聞かれたら、README の「トークンの権限について (管理者向けの説明)」を見せてください。</div>`;
     } else {
       $("token-how").innerHTML =
         `<a href="https://github.com/settings/tokens/new?scopes=repo,project&description=insights-kit" target="_blank" rel="noopener">classic トークンの作成画面</a> ` +

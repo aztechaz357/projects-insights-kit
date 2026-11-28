@@ -49,10 +49,13 @@ Projects は Actions 標準のトークンでは操作できないため、個�
 
 **Organization の Project の場合 (fine-grained トークン)**
 
+> 会社では、**専用アカウント (bot ユーザー) に対象 Project だけの Write 権限を付け、そのアカウントでトークンを作る**のがおすすめです。
+> 管理者に権限の理由を聞かれたら、下の「[トークンの権限について (管理者向けの説明)](#トークンの権限について-管理者向けの説明)」を見せてください。
+
 1. https://github.com/settings/personal-access-tokens/new を開く
-2. **Resource owner** を会社の Organization にする
-3. **Repository access**: Project に入っている Issue のリポジトリを選ぶ (迷ったら All repositories)
-4. **Permissions**
+2. **Resource owner** を会社の Organization にする。**Expiration** は社内ルールに合わせて短めに (例: 90 日)
+3. **Repository access**: **Only select repositories** で、Project に入っている Issue のリポジトリだけを選ぶ
+4. **Permissions** (これ以外は付けない)
    - Organization permissions → **Projects: Read and write**
    - Repository permissions → **Issues: Read-only**、**Pull requests: Read-only**
 5. **Generate token**。Organization の設定によっては管理者の承認が必要です
@@ -164,6 +167,45 @@ Project のドラフト「📈 Fever: 進捗率」を開き、本文の「⚙️
 - 使う外部アクションは GitHub 公式の `actions/checkout` と `actions/upload-artifact` だけです。社内ルールでさらに固定したい場合は、`@v7` をコミット SHA に置き換えてください。
 - ワークフローの権限は `contents: read` のみ、checkout は `persist-credentials: false` です。トークン (Secret `PROJECT_TOKEN`) はログで伏せられ、`gh` にだけ渡されます。
 - 結果の保存先は、対象 Project 内のドラフト Issue と、そのリポジトリの Actions の Artifacts (30 日) だけです。
+
+## トークンの権限について (管理者向けの説明)
+
+### Organization への書き込みではなく、Projects 権限だけです
+
+fine-grained トークンで求めるのは **Organization permissions → Projects: Read and write の 1 項目だけ**です。
+Organization の Project (`github.com/orgs/<組織>/projects/N`) はリポジトリではなく Organization が持ち主なので、
+GitHub の画面上は「Organization permissions」の欄に入っていますが、メンバー管理・Organization の設定・リポジトリの作成や削除などの権限は一切使いません。
+リポジトリ側も **Issues / Pull requests の読み取りのみ**です (コードやリポジトリの内容には書き込みません)。
+
+### なぜ読み取りではなく書き込みが必要か
+
+キットが Project に対して行う書き込みは、次の GraphQL 操作だけです (`insights_kit.py` で確認できます)。
+
+| 操作 | いつ | 内容 |
+|---|---|---|
+| `createProjectV2Field` | setup のときだけ | 楽観・最可能・悲観・見積・Phase・Fever などのフィールドを追加 |
+| `addProjectV2DraftIssue` | setup のときだけ | 設定と履歴を保存するドラフト Issue「📈 Fever: …」を 2 件追加 |
+| `updateProjectV2DraftIssue` | 毎朝 | 上のドラフト Issue の本文 (設定と履歴) を更新 |
+| `updateProjectV2ItemFieldValue` | 毎朝 | 各 Issue の「見積 (人日)」と、フィーバーの値を書き込む |
+
+既存 Issue のタイトル・本文・状態の変更、フィールドやアイテム・Project の削除は行いません。
+
+### 書き込める範囲を対象の Project 1 つに絞る方法
+
+fine-grained トークンの Projects 権限は、Project 単位では絞れません。トークンを作ったアカウントが書き込める **Organization の Project すべて**が対象になります。
+ただしトークンは、**作ったアカウント自身の権限を超えることはできません**。そこで次のように運用すると、実際に書き込めるのは対象の Project だけになります。
+
+1. キット専用のアカウント (bot ユーザー) を用意し、Organization のメンバーにする (Base permissions は最小に)
+2. 対象 Project の **Settings → Manage access** で、そのアカウントに **Write** を付ける (ほかの Project には付けない)
+3. 対象の Issue があるリポジトリには **Read** だけを付ける
+4. そのアカウントで、上の手順 2 のとおりトークンを作る (Only select repositories・短い有効期限・Projects / Issues / Pull requests 以外の権限なし)
+
+### そのほか確認しておくとよい点
+
+- トークンはリポジトリの Secret (`PROJECT_TOKEN`) にだけ保存され、ログでは伏せられます。ワークフローの `GITHUB_TOKEN` は `contents: read` のみです。
+- 通信先は GitHub API だけです。Project の情報が GitHub 以外に送られることはありません (テストで確認しています)。
+- 実行されるのはコピー先のリポジトリにある 2 ファイルと、GitHub 公式の `actions/checkout` / `actions/upload-artifact` だけです。
+- やめるときは、トークンを削除 (または期限切れに) し、ワークフローのファイルを消せば止まります。追加したフィールドとドラフト Issue は Project 上で手動で削除できます。
 
 ## よくある質問
 
