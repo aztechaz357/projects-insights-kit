@@ -458,7 +458,11 @@ def cmd_setup(a) -> None:
             f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
             f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n"
             f"- 設定の保存先: Project 内のドラフト「📈 Fever: 進捗率」の本文 (JSON を編集すると次回から反映)\n")
-    summary(insights_recipe(cfg))
+    statuses = list(fields[names["status"]].get("options", {}))
+    if len(statuses) < 3:
+        warn(f"Status の選択肢が {statuses} だけのため、累積フロー図 (CFD) で作業中の滞留が見えません。"
+             "Project の Status に「In Progress」「In Review」などを追加してください")
+    summary(insights_recipe(cfg, statuses))
     run_daily(proj, cfg, history, today_jst(), Path(a.out))
 
 
@@ -494,13 +498,14 @@ def parse_state(body: str, strict: bool) -> tuple[dict, list]:
     return cfg, history
 
 
-def insights_recipe(cfg: dict) -> str:
+def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
     f = cfg["fields"]
     est, metric = f["estimate"], f["fever_metric"]
     excl = f"no:{slug(metric)}"
     rows = [
         ("バーンダウン (全体)", f"`{excl} -status:Done`", "Line", "Time", "None", f"Sum of {est}"),
         ("バーンアップ", f"`{excl}`", "Stacked area", "Time", "Status", f"Sum of {est}"),
+        ("累積フロー図 (CFD)", f"`{excl} is:issue`", "Stacked area", "Time", "Status", "Count of items"),
         ("フィーバー (推移)", f"`has:{slug(metric)}`", "Line", "Time", metric, f"Sum of {f['fever_value']}"),
         ("フィーバー (現在のゾーン)", f"`has:{slug(metric)}`", "Bar", f["fever_zone"], "None", "Count of items"),
     ]
@@ -512,6 +517,16 @@ def insights_recipe(cfg: dict) -> str:
              "| チャート | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |", "|---|---|---|---|---|---|"]
     lines += [f"| {' | '.join(r)} |" for r in rows]
     lines += ["", "Time を選んだあと Group by が選べない場合は、Filter に `status:Done` を足した別チャートなどに分けてください。"]
+    lines += ["", "### 累積フロー図 (CFD) の見方",
+              "- 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら滞留しています",
+              "- 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)",
+              "- Done の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたらスコープが増えています",
+              "- 帯は Status の選択肢ごとに分かれます。読みやすいよう、Project の Settings → Status で流れの順 "
+              "(例: Todo → In Progress → In Review → Done) に並べてください"]
+    if statuses:
+        lines += [f"- 今の Status の順: {' → '.join(statuses)}"]
+        if len(statuses) < 3:
+            lines += ["- ⚠️ 作業中を表す Status がありません。「In Progress」「In Review」などを追加すると、滞留が見えるようになります"]
     return "\n".join(lines)
 
 

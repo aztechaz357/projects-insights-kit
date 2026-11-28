@@ -1,6 +1,6 @@
 # Projects Insights Kit
 
-**すでに Issue が入っている GitHub Project** に、次の3つを後付けします。
+**すでに Issue が入っている GitHub Project** に、次の4つを後付けします。
 **既存のリポジトリに `.github/` 配下の 2 ファイルをコピーするだけ**で動き、操作はすべてブラウザで完結します。
 リポジトリには何も書き込まず、既存 Issue のタイトル・本文・状態も変更しません。
 
@@ -22,6 +22,7 @@
 | 三点見積 (PERT) | 楽観・最可能・悲観 (人日) を入れると **見積 (人日) = (楽観 + 4×最可能 + 悲観) / 6** を毎朝自動計算 |
 | 進め方 | 工程 × 2週間スプリント / 2週間スプリント / 1週間スプリント / 工程 / なし から選択 |
 | フィーバーチャート | 進捗率とバッファ消費率を毎朝計算し、Insights で表示 |
+| 累積フロー図 (CFD) | Status ごとの件数の推移を Insights で表示し、仕掛かりの滞留やスコープの増加を見る |
 
 ## セットアップ (所要 10 分)
 
@@ -99,6 +100,7 @@ Project 右上の **Insights → New chart** で作り、**Filter** はグラフ
 | バーンダウン (全体) | `no:fever-metric -status:Done` | Line | Time | None | Sum of 見積 (人日) |
 | バーンダウン (今のスプリント) | `no:fever-metric -status:Done sprint:@current` | Line | Time | None | Sum of 見積 (人日) |
 | バーンアップ | `no:fever-metric` | Stacked area | Time | Status | Sum of 見積 (人日) |
+| 累積フロー図 (CFD) | `no:fever-metric is:issue` | Stacked area | Time | Status | Count of items |
 | フィーバー (推移) | `has:fever-metric` | Line | Time | Fever Metric | Sum of Fever Value |
 | フィーバー (現在のゾーン) | `has:fever-metric` | Bar | Fever Zone | None | Count of items |
 | 工程別の残作業 | `no:fever-metric -status:Done` | Stacked column | Phase | Status | Sum of 見積 (人日) |
@@ -106,6 +108,20 @@ Project 右上の **Insights → New chart** で作り、**Filter** はグラフ
 - `no:fever-metric` は、自動で作るドラフト Issue「📈 Fever: …」2 件を集計から外すためのものです
 - Insights の推移グラフは **実際の変更時刻** で記録されるため、線は導入した日から伸びていきます
 - Time を選ぶと Group by が選べない場合は、Filter に `status:Done` を足したチャートを別に作って並べてください
+
+#### 累積フロー図 (CFD) を役立てるには
+
+CFD は、Status ごとの件数を積み上げた推移のグラフです。バーンアップと同じ形で、Y 軸を見積ではなく **件数** (Count of items) にしたものです。
+`is:issue` で Issue だけを数えます (PR やドラフトは数えません)。見積の量で見たい場合はバーンアップを見てください。
+
+- **Status に作業中の段階を作る**: Status が Todo と Done だけだと、作業中の滞留が見えません。
+  Project の **Settings → Status** で「In Progress」「In Review」などを追加し、流れの順 (Todo → In Progress → In Review → Done) に並べてください。
+  Setup の Summary に今の Status の並びが出て、段階が足りないと警告も出ます。
+- **見方**
+  - 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら、どこかで詰まっています
+  - 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)
+  - Done の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたら、スコープが増えています
+- 進め方でスプリントや工程を使っている場合は、Filter に `sprint:@current` や `phase:実装` を足すと、その範囲だけの CFD になります。
 
 以上で完了です。以後は平日 09:00 (日本時間) に自動更新されます。
 
