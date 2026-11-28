@@ -6,6 +6,24 @@
 - 対象のコード: [.github/workflows/insights-kit.yml](../.github/workflows/insights-kit.yml) と [.github/insights-kit/insights_kit.py](../.github/insights-kit/insights_kit.py)
 - 使い方は [README](../README.md) を見てください
 
+## 目次
+
+- [1. 設計の方針](#1-設計の方針)
+- [2. 全体の構成](#2-全体の構成)
+  - [2.1. 何をどこで見るか](#21-何をどこで見るか)
+- [3. クラス図](#3-クラス図)
+  - [3.1. 主な定数](#31-主な定数)
+- [4. データの保存形式](#4-データの保存形式)
+- [5. シーケンス図](#5-シーケンス図)
+  - [5.1. セットアップ (`mode: setup`)](#51-セットアップ-mode-setup)
+  - [5.2. 毎朝の更新 (`mode: daily`)](#52-毎朝の更新-mode-daily)
+  - [5.3. 図を見る](#53-図を見る)
+- [6. アクティビティ図](#6-アクティビティ図)
+  - [6.1. ワークフローのジョブ](#61-ワークフローのジョブ)
+  - [6.2. 毎朝の計算 (`run_daily`)](#62-毎朝の計算-run_daily)
+  - [6.3. ゾーンの判定 (`fever_zone`)](#63-ゾーンの判定-fever_zone)
+- [7. 配布と保守](#7-配布と保守)
+
 ## 1. 設計の方針
 
 | 方針 | 実現方法 |
@@ -55,7 +73,7 @@ flowchart LR
     SUM -. リンク .-> ART
 ```
 
-### 何をどこで見るか
+### 2.1. 何をどこで見るか
 
 | 図・情報 | 作る場所 | 見る場所 |
 |---|---|---|
@@ -195,7 +213,7 @@ classDiagram
     Reports ..> HistoryRow : 図と表にする
 ```
 
-### 主な定数
+### 3.1. 主な定数
 
 | 定数 | 意味 |
 |---|---|
@@ -233,7 +251,7 @@ flowchart TB
 
 ## 5. シーケンス図
 
-### 5.1 セットアップ (`mode: setup`)
+### 5.1. セットアップ (`mode: setup`)
 
 ```mermaid
 sequenceDiagram
@@ -259,11 +277,11 @@ sequenceDiagram
     Note over K: 既存の設定 JSON と履歴があれば引き継ぐ
     K->>G: fields() を読み直す (チャートのリンクに ID が要る)
     K->>A: Summary に「Insights のチャート設定」とリンクの表
-    K->>K: run_daily (5.2 と同じ)
+    K->>K: run_daily (5.2. と同じ)
     A->>A: SVG を Artifacts に置き、Summary の先頭に「📈 図を開く」
 ```
 
-### 5.2 毎朝の更新 (`mode: daily`)
+### 5.2. 毎朝の更新 (`mode: daily`)
 
 ```mermaid
 sequenceDiagram
@@ -304,7 +322,7 @@ sequenceDiagram
     A->>A: Summary = 「📈 図を開く」のリンク + キットの Summary
 ```
 
-### 5.3 図を見る
+### 5.3. 図を見る
 
 ```mermaid
 sequenceDiagram
@@ -323,7 +341,7 @@ sequenceDiagram
 
 ## 6. アクティビティ図
 
-### 6.1 ワークフローのジョブ
+### 6.1. ワークフローのジョブ
 
 ```mermaid
 flowchart TD
@@ -345,7 +363,7 @@ flowchart TD
     sum --> done([終了])
 ```
 
-### 6.2 毎朝の計算 (`run_daily`)
+### 6.2. 毎朝の計算 (`run_daily`)
 
 ```mermaid
 flowchart TD
@@ -380,7 +398,7 @@ flowchart TD
     sum1 --> e
 ```
 
-### 6.3 ゾーンの判定 (`fever_zone`)
+### 6.3. ゾーンの判定 (`fever_zone`)
 
 ゾーンの境界線は、進捗率 p に応じて直線で動きます (既定: 黄 10%→70%、赤 30%→90%)。
 
