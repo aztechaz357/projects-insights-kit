@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import datetime as dt
 import json
 import math
@@ -939,6 +940,30 @@ def item_rows(items: list[dict], work: list[dict], f: dict, cal: Calendar, today
     return rows, actuals
 
 
+ITEM_CSV_COLUMNS = ["日付", "No.", "アイテム", "タイトル", "URL", "担当者", "開始日", "完了予定日",
+                    "累計 計画 (%)", "累計 実績 (%)", "差", "日次 計画", "日次 実績", "次の1日で必要",
+                    "週次 計画", "週次 実績", "次の1週で必要", "Action"]
+
+
+def items_csv(path: Path, rows: list[dict], today: dt.date) -> None:
+    """アイテム別の進捗表を CSV に書く (Excel でそのまま開けるよう BOM 付き UTF-8。数値は % や + を付けない)。"""
+    keys = ["plan", "actual", "diff", "d_plan", "d_actual", "d_need", "w_plan", "w_actual", "w_need"]
+
+    def text(s: str) -> str:
+        # = + - @ で始まる文字は Excel が数式として実行するため、先頭に ' を付けて文字として扱わせる
+        s = str(s or "").replace("\r", "").replace("\n", " ")
+        return "'" + s if s[:1] in ("=", "+", "-", "@", "\t") else s
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as fp:
+        w = csv.writer(fp)
+        w.writerow(ITEM_CSV_COLUMNS)
+        for r in rows:
+            w.writerow([today.isoformat(), r["no"], r["ref"], text(r["title"]), r["url"], ", ".join(r["assignees"]),
+                        r["start"] or "", r["due"] or ""] + ["" if r.get(k) is None else r[k] for k in keys]
+                       + [text(r["action"])])
+
+
 def items_md(rows: list[dict], f: dict, fields: dict) -> str:
     """アイテム別の計画・実績の表 (Markdown)。"""
     lines = ["### 📋 アイテム別の進捗 (サブ Issue を持つ Issue ごと)", ""]
@@ -1074,6 +1099,8 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
     save(out / "fever-history.json", history)
     svg_fever_chart(out / "fever-chart.svg", history, cfg["fever_zones"], f"フィーバーチャート — {cfg['project']['title']}")
     svg_cfd(out / "cfd.svg", history, status_order, cfg["done_status"], f"累積フロー図 (CFD) — {cfg['project']['title']}")
+    if item_table:
+        items_csv(out / f"item-progress-{today.isoformat()}.csv", item_table, today)
 
     # --- 3) トラッカー (ドラフト Issue) を更新。設定と履歴は「進捗率」側に保存
     if len(trackers) < len(METRICS):

@@ -129,20 +129,31 @@ jobs:
           archive: false
           retention-days: 30
 
+      # アイテム別の進捗表の CSV (item-progress-日付.csv)。社内の PC から取りに行けるよう zip にせずに置く
+      - uses: actions/upload-artifact@v7
+        id: item_csv
+        if: steps.check.outputs.ready && hashFiles('out/item-progress-*.csv') != ''
+        with:
+          path: out/item-progress-*.csv
+          archive: false
+          retention-days: 30
+
       - name: Summary
         if: always() && steps.check.outputs.ready
         env:
           FEVER_URL: ${{ steps.fever_svg.outputs.artifact-url }}
           CFD_URL: ${{ steps.cfd_svg.outputs.artifact-url }}
+          CSV_URL: ${{ steps.item_csv.outputs.artifact-url }}
         run: |
           {
-            if [ -n "$FEVER_URL$CFD_URL" ]; then
+            if [ -n "$FEVER_URL$CFD_URL$CSV_URL" ]; then
               echo "## 📈 図を開く"
               echo
               if [ -n "$FEVER_URL" ]; then echo "- [フィーバーチャート]($FEVER_URL)"; fi
               if [ -n "$CFD_URL" ]; then echo "- [累積フロー図 (CFD)]($CFD_URL)"; fi
+              if [ -n "$CSV_URL" ]; then echo "- [アイテム別の進捗表 (CSV・Excel で開けます)]($CSV_URL)"; fi
               echo
-              echo "リンクを開くとブラウザに図が表示されます (GitHub へのログインが必要。30 日間)。"
+              echo "リンクを開くとブラウザに図が表示されます (CSV はダウンロード。GitHub へのログインが必要。30 日間)。"
               echo
             fi
             if [ -f "$RUNNER_TEMP/kit-summary.md" ]; then cat "$RUNNER_TEMP/kit-summary.md"; fi

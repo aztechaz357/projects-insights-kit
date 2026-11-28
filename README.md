@@ -23,6 +23,7 @@
     - [2.6.1. テンプレートを準備する (最初の 1 回だけ)](#261-テンプレートを準備する-最初の-1-回だけ)
     - [2.6.2. 新しい Project を作る (Project を作るたび)](#262-新しい-project-を作る-project-を作るたび)
   - [2.7. アイテム別の進捗表 (計画・実績・次に必要な進捗)](#27-アイテム別の進捗表-計画実績次に必要な進捗)
+    - [2.7.1. 過去の進捗表を SharePoint やサーバーに残す (CSV)](#271-過去の進捗表を-sharepoint-やサーバーに残す-csv)
 - [3. 図を見る場所](#3-図を見る場所)
 - [4. どこに何が保存されるか](#4-どこに何が保存されるか)
 - [5. 進め方の選び方](#5-進め方の選び方)
@@ -46,6 +47,7 @@
 | [.github/insights-kit/insights_kit.py](.github/insights-kit/insights_kit.py) | 処理の本体 (Python 標準ライブラリ + gh CLI のみ) |
 
 `setup.html`・`tools/`・`tests/` はこのキットの配布・保守用で、コピー先には不要です。
+`csv-download/` は、過去の進捗表を SharePoint などに残したい場合に社内の PC に置くスクリプトです (2.7.1.)。
 
 | 後付けするもの | 中身 |
 |---|---|
@@ -261,6 +263,55 @@ Insights では Status ごとの帯を時系列に積み上げられない (Time
 - 計画は営業日で計算します (土日と、設定した祝日を除く)
 - 日次・週次の実績は、前の営業日 (5 営業日前) の記録が残っているときに出ます。アイテム別の記録は直近 15 日分だけ保存します
 
+#### 2.7.1. 過去の進捗表を SharePoint やサーバーに残す (CSV)
+
+ドラフトの本文の表は毎朝上書きされます。過去の表を残すには、毎朝の CSV を社内の PC から取ってきて、SharePoint のフォルダに保存します。
+
+```
+GitHub Actions (毎朝 9:00) … item-progress-日付.csv を実行結果に添付 (30 日間残る)
+        ↑ 取りに行く (読むだけ。GitHub から社内へは何も送らない)
+社内の Windows PC (タスク スケジューラで平日 9:30)
+  └ csv-download/Get-InsightsKitCsv.ps1
+      ├ SharePoint のフォルダ (OneDrive で同期したフォルダに置く → OneDrive がアップロード)
+      └ サーバーの共有フォルダ (任意。両方に置くこともできます)
+```
+
+- CSV は Excel でそのまま開けます (BOM 付き UTF-8)。1 日 1 ファイルで、数 KB です
+- 実行結果の Summary の「📈 図を開く」→「アイテム別の進捗表 (CSV)」からも、手でダウンロードできます
+- PC が止まっていた日の分も、次に動いたときに取ります (GitHub に残っている 30 日分まで)。保存先にすでにあるファイルは上書きしません
+
+**準備 (最初の 1 回だけ)**
+
+1. **SharePoint のフォルダを同期する**: SharePoint で保存先のフォルダを開き、上の **同期** を押す。エクスプローラーに、組織名のフォルダ (例: `C:\Users\taro\Contoso\PMO - 進捗表`) ができます
+2. **スクリプトを置く**: [csv-download/Get-InsightsKitCsv.ps1](csv-download/Get-InsightsKitCsv.ps1) を PC の任意のフォルダ (例: `C:\insights-kit\`) に保存し、中身を確認してから、PowerShell で `Unblock-File .\Get-InsightsKitCsv.ps1` を実行する
+3. **読み取り専用のトークンを作る**: [fine-grained トークンの作成画面](https://github.com/settings/personal-access-tokens/new) で、
+   **Repository access** をワークフローを置いたリポジトリだけにし、**Repository permissions → Actions: Read-only** だけを付けて Generate
+   (Project の権限は不要です。キットの `PROJECT_TOKEN` とは別のトークンにしてください)
+4. **トークンを保存する**: PowerShell でスクリプトのフォルダに移動し、次を実行してトークンを貼り付ける (Windows の機能で暗号化され、この PC のこのユーザーだけが読めます)
+
+   ```powershell
+   .\Get-InsightsKitCsv.ps1 -SaveToken
+   ```
+
+5. **試しに動かす**: 保存先のフォルダに `item-progress-日付.csv` ができれば成功です
+
+   ```powershell
+   .\Get-InsightsKitCsv.ps1 -Repo acme/portal -Destination "C:\Users\taro\Contoso\PMO - 進捗表"
+   ```
+
+   サーバーにも残す場合は、保存先をカンマで並べます: `-Destination "C:\Users\taro\Contoso\PMO - 進捗表", "\\fileserver\pm\進捗表"`
+
+6. **毎朝動くように登録する**: 同じ引数に `-RegisterTask` を付けて実行すると、タスク スケジューラに「Insights Kit CSV」(平日 9:30) が登録されます
+
+   ```powershell
+   .\Get-InsightsKitCsv.ps1 -Repo acme/portal -Destination "C:\Users\taro\Contoso\PMO - 進捗表" -RegisterTask
+   ```
+
+- 動いた結果は、スクリプトと同じフォルダの `insights-kit-csv.log` に残ります
+- タスクはそのユーザーがログオンしている間に動きます (OneDrive が同期するのもログオン中です)。PC がスリープしていた日は、起動後に動きます
+- 会社の設定でスクリプトの実行が禁止されている場合 (実行ポリシー) は、情報システム部門に相談してください
+- このスクリプトの通信先は GitHub だけです (テストで確認しています)。SharePoint へのアップロードは OneDrive が行います
+
 ## 3. 図を見る場所
 
 図を見られる場所は 2 か所です。
@@ -289,6 +340,7 @@ Insights では Status ごとの帯を時系列に積み上げられない (Time
 | 日々の推移 (表) | 同じドラフト本文 (直近 30 日分を表示、約 1 年 (260 営業日) 分を保存。本文の上限を超える場合は古い分から削る) |
 | アイテム (親 Issue) 別の進捗率 | 同じドラフト本文の履歴 (日次・週次の比較のため、直近 15 日分だけ保存) |
 | 開始日・完了予定日・Action | Project のフィールド (親 Issue の行に入力) |
+| アイテム別の進捗表 (CSV) | 各実行結果の **Artifacts** の `item-progress-日付.csv` (30 日保存)。長く残すときは社内の PC で SharePoint やサーバーに保存 (2.7.1.) |
 | Status ごとの件数 (CFD の元データ) | 同じドラフト本文 (直近 10 日分を表示、上と同じ期間を保存) |
 | フィーバー・CFD の図 (すぐ見られる版) | 各実行結果の **Summary** (直近 30 日分。Mermaid で描画) |
 | フィーバーチャート・CFD の図 (SVG) | 各実行結果の **Artifacts** の `fever-chart.svg` / `cfd.svg` (zip にしないので、Summary の「📈 図を開く」からブラウザで開ける) と、まとめた zip の `fever-chart`。30 日保存 |
