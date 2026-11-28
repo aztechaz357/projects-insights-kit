@@ -1,6 +1,6 @@
-# Projects Insights Kit  https://github.com/aztechaz357/projects-insights-kit
-# with: の project_url を対象 Project の URL に書き換えて使う (setup.html を使うと自動で入る)
-# 平日 09:00 (日本時間) に自動更新。リポジトリには何も書き込まない
+# Projects Insights Kit (このファイルと .github/insights-kit/insights_kit.py をコピーして使う)
+# PROJECT_URL を対象 Project の URL に書き換える。平日 09:00 (日本時間) に自動更新
+# 外部のコード・サービスは使わない (通信先は GitHub のみ)。リポジトリには何も書き込まない
 name: Insights Kit
 
 on:
@@ -32,17 +32,58 @@ on:
         type: boolean
         default: true
 
+permissions:
+  contents: read
+
 jobs:
-  kit:
-    uses: aztechaz357/projects-insights-kit/.github/workflows/run.yml@v1
-    with:
-      project_url: "https://github.com/orgs/YOUR-ORG/projects/1"
-      mode: ${{ inputs.mode || 'daily' }}
-      planned_end_date: ${{ inputs.planned_end_date || '' }}
-      start_date: ${{ inputs.start_date || '' }}
-      buffer: ${{ inputs.buffer || 'auto' }}
-      cadence: ${{ inputs.cadence || 'phase+sprint-2w' }}
-      estimate_field: ${{ inputs.estimate_field || '' }}
-      japan_holidays: ${{ github.event_name != 'workflow_dispatch' || inputs.japan_holidays }}
-    secrets:
-      PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_URL: "https://github.com/orgs/YOUR-ORG/projects/1"
+      GH_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+      # 入力値は env 経由で渡す (スクリプトインジェクション対策)
+      IN_MODE: ${{ inputs.mode || 'daily' }}
+      IN_END: ${{ inputs.planned_end_date }}
+      IN_START: ${{ inputs.start_date }}
+      IN_BUFFER: ${{ inputs.buffer || 'auto' }}
+      IN_CADENCE: ${{ inputs.cadence || 'phase+sprint-2w' }}
+      IN_EST: ${{ inputs.estimate_field }}
+      IN_JPH: ${{ github.event_name != 'workflow_dispatch' || inputs.japan_holidays }}
+    steps:
+      - name: Check
+        id: check
+        run: |
+          if [[ "$PROJECT_URL" == *YOUR-ORG* ]]; then
+            echo "::notice::PROJECT_URL の YOUR-ORG を書き換えてください。スキップします"; exit 0
+          fi
+          [ -n "$GH_TOKEN" ] || { echo "::error::Secret PROJECT_TOKEN が未登録です"; exit 1; }
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.ready
+        with:
+          sparse-checkout: .github/insights-kit
+          persist-credentials: false
+
+      - name: Run
+        if: steps.check.outputs.ready
+        run: |
+          KIT=.github/insights-kit/insights_kit.py
+          python3 "$KIT" check-token
+          if [ "$IN_MODE" = setup ]; then
+            [ -n "$IN_END" ] || { echo "::error::setup には planned_end_date が必要です"; exit 1; }
+            a=(--project-url "$PROJECT_URL" --planned-end-date "$IN_END" --buffer "$IN_BUFFER" --cadence "$IN_CADENCE")
+            [ -n "$IN_START" ] && a+=(--start-date "$IN_START")
+            [ -n "$IN_EST" ] && a+=(--estimate-field "$IN_EST")
+            [ "$IN_JPH" = true ] || a+=(--no-japan-holidays)
+            python3 "$KIT" setup "${a[@]}" --out out
+          else
+            python3 "$KIT" daily --project-url "$PROJECT_URL" --out out
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: steps.check.outputs.ready
+        with:
+          name: fever-chart
+          path: out/
+          retention-days: 30
