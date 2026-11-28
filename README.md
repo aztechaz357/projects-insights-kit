@@ -22,7 +22,7 @@
 | 三点見積 (PERT) | 楽観・最可能・悲観 (人日) を入れると **見積 (人日) = (楽観 + 4×最可能 + 悲観) / 6** を毎朝自動計算 |
 | 進め方 | 工程 × 2週間スプリント / 2週間スプリント / 1週間スプリント / 工程 / なし から選択 |
 | フィーバーチャート | 進捗率とバッファ消費率を毎朝計算し、Insights で表示 |
-| 累積フロー図 (CFD) | Status ごとの件数の推移を Insights で表示し、仕掛かりの滞留やスコープの増加を見る |
+| 累積フロー図 (CFD) | Status ごとの件数を毎朝記録して図 (SVG) にし、仕掛かりの滞留やスコープの増加を見る |
 
 ## セットアップ (所要 10 分)
 
@@ -98,51 +98,57 @@ Project 右上の **Insights → New chart** で作り、**Filter** はグラフ
 
 | チャート | Filter | Layout | X-axis | Group by | Y-axis |
 |---|---|---|---|---|---|
-| バーンダウン (全体) | `no:fever-metric -status:Done` | Line | Time | None | Sum of 見積 (人日) |
-| バーンダウン (今のスプリント) | `no:fever-metric -status:Done sprint:@current` | Line | Time | None | Sum of 見積 (人日) |
-| バーンアップ | `no:fever-metric` | Stacked area | Time | Status | Sum of 見積 (人日) |
-| 累積フロー図 (CFD) | `no:fever-metric is:issue` | Stacked area | Time | Status | Count of items |
-| フィーバー (推移) | `has:fever-metric` | Line | Time | Fever Metric | Sum of Fever Value |
+| バーンダウン (全体) | `no:fever-metric -status:Done` | Line | Time | (選べない) | Sum of 見積 (人日) |
+| バーンダウン (今のスプリント) | `no:fever-metric -status:Done sprint:@current` | Line | Time | (選べない) | Sum of 見積 (人日) |
+| バーンアップ | `no:fever-metric` | Stacked area | Time | (選べない) | Sum of 見積 (人日) |
+| 進捗率の推移 | `fever-metric:"Progress %"` | Line | Time | (選べない) | Sum of Fever Value |
+| バッファ消費率の推移 | `fever-metric:"Buffer %"` | Line | Time | (選べない) | Sum of Fever Value |
 | フィーバー (現在のゾーン) | `has:fever-metric` | Bar | Fever Zone | None | Count of items |
+| Status 別の件数 (今) | `no:fever-metric is:issue` | Column | Status | None | Count of items |
 | 工程別の残作業 | `no:fever-metric -status:Done` | Stacked column | Phase | Status | Sum of 見積 (人日) |
 | 担当者別の残作業 | `no:fever-metric -status:Done` | Stacked column | Assignees | Status | Sum of 見積 (人日) |
-| 自分のバーンダウン | `no:fever-metric -status:Done assignee:@me` | Line | Time | None | Sum of 見積 (人日) |
-| 注目 Issue のバーンダウン | `no:fever-metric -status:Done parent-issue:acme/portal#12` | Line | Time | None | Sum of 見積 (人日) |
+| 自分のバーンダウン | `no:fever-metric -status:Done assignee:@me` | Line | Time | (選べない) | Sum of 見積 (人日) |
+| 注目 Issue 別の残作業 | `no:fever-metric -status:Done` | Stacked column | Parent issue | Status | Sum of 見積 (人日) |
+| 注目 Issue のバーンダウン | `no:fever-metric -status:Done parent-issue:acme/portal#12` | Line | Time | (選べない) | Sum of 見積 (人日) |
 
 - `no:fever-metric` は、自動で作るドラフト Issue「📈 Fever: …」2 件を集計から外すためのものです
+- **X-axis を Time にすると Group by は選べません。** 線 (帯) は **Open** と **Completed** (Status が Done のもの) の 2 つに自動で分かれます。
+  バーンアップは、この Open / Completed の積み上げとして表示されます
+- Time のチャートでも、Y-axis で `Sum of a field` を選ぶと見積などの合計にできます
 - Insights の推移グラフは **実際の変更時刻** で記録されるため、線は導入した日から伸びていきます
-- GitHub のドキュメントでは、Group by は X-axis が Time 以外のチャート向けとして説明されています。
-  Time を選ぶと Group by が選べない場合は、Group by を None にし、Filter に `status:Done` などを足したチャートを別に作って並べてください
+- 上の組み合わせは、試験用の Project の Insights 画面で実際に作れることを確認しています
 
 #### 担当者ごと・注目 Issue ごとに見る
 
 - **担当者ごと**
   - 「担当者別の残作業」は、今の時点で誰に残作業がどれだけあるかを、Status ごとに積み上げて見せます
   - 「自分のバーンダウン」の `assignee:@me` は **グラフを見ている人自身** に置き換わるので、1 枚作るだけで各自が自分の分を見られます
-  - 特定の人を見るときは `assignee:ユーザー名` (`assignee:alice,bob` で複数)、担当者がいないものは `no:assignee` です
-  - CFD やバーンアップの Filter に足せば、担当者ごとの CFD やバーンアップにもなります
+  - 特定の人を見るときは `assignee:ユーザー名` (`assignee:alice,bob` で複数)、担当者がいないものは `no:assignee` です。バーンアップの Filter に足せば、担当者ごとのバーンアップになります
 - **注目 Issue ごと**
   - 注目 Issue は、サブ Issue (子 Issue) を持つ親 Issue のことです。Setup の「注目 Issue」に入れるか、設定 JSON の `focus_issues` に書きます
-  - `parent-issue:OWNER/REPO#番号` で、その Issue の **直下のサブ Issue** のうち、この Project に入っているものだけに絞れます。注目 Issue ごとにチャートを 1 枚ずつ作ってください。Setup の Summary には、設定した注目 Issue ごとの行が入った表が出ます
-  - 孫以下のサブ Issue は Insights のフィルタでは拾えません。代わりに次の進捗表で集計します
+  - 「注目 Issue 別の残作業」は、X-axis の **Parent issue** で親 Issue ごとに 1 本の棒になり、1 枚で全部の注目 Issue を見比べられます (親がないものは No Parent issue)
+  - 推移を見たいときは、`parent-issue:OWNER/REPO#番号` で絞ったバーンダウンを注目 Issue ごとに作ります。Setup の Summary に、設定した注目 Issue ごとの行が出ます
+  - Insights (Parent issue・`parent-issue:`) で拾えるのは **直下のサブ Issue** だけです。孫以下は次の進捗表で集計します
 - **毎朝の進捗表**: 毎朝の実行結果の Summary と、ドラフト「📈 Fever: 進捗率」の本文に、次の表が出ます。
   - 担当者別 (件数・完了・残り見積・進捗)
   - 注目 Issue 別 (サブ Issue を孫以下まで集計)
   - それぞれの Insights の Filter に足す文字列も一緒に出るので、コピーしてチャートを作れます
 
-#### 累積フロー図 (CFD) を役立てるには
+#### 累積フロー図 (CFD)
 
-CFD は、Status ごとの件数を積み上げた推移のグラフです。バーンアップと同じ形で、Y 軸を見積ではなく **件数** (Count of items) にしたものです。
-`is:issue` で Issue だけを数えます (PR やドラフトは数えません)。見積の量で見たい場合はバーンアップを見てください。
+Insights では Status ごとの帯を時系列に積み上げられない (Time のチャートは Open / Completed の 2 つだけ) ため、**CFD はキットが描きます**。
 
+- 毎朝、Status ごとの件数 (Issue とドラフト。PR は数えない) を記録します。記録はキットを動かし始めた日からです
+- 図は、各実行結果の **Artifacts** (`fever-chart` の中の `cfd.svg`) にあります。ブラウザで開けます
+- 直近 10 日分の件数の表が、ドラフト「📈 Fever: 進捗率」の本文と実行結果の Summary に出ます
+- 帯は下から「完了 → 流れの後ろの Status → … → 最初の Status」の順に積みます。Status が空の項目は一番上の灰色の帯 (No Status) です
 - **Status に作業中の段階を作る**: Status が Todo と Done だけだと、作業中の滞留が見えません。
   Project の **Settings → Status** で「In Progress」「In Review」などを追加し、流れの順 (Todo → In Progress → In Review → Done) に並べてください。
-  Setup の Summary に今の Status の並びが出て、段階が足りないと警告も出ます。
+  Setup の Summary に今の Status の並びが出て、段階が足りないと警告も出ます
 - **見方**
   - 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら、どこかで詰まっています
   - 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)
-  - Done の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたら、スコープが増えています
-- 進め方でスプリントや工程を使っている場合は、Filter に `sprint:@current` や `phase:実装` を足すと、その範囲だけの CFD になります。
+  - 一番下の完了の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたら、スコープが増えています
 
 以上で完了です。以後は平日 09:00 (日本時間) に自動更新されます。
 
@@ -151,8 +157,9 @@ CFD は、Status ごとの件数を積み上げた推移のグラフです。バ
 | もの | 場所 |
 |---|---|
 | 設定 (期間・進め方・完了とみなす Status など) | Project 内のドラフト「📈 Fever: 進捗率」本文の「⚙️ 設定」JSON |
-| 日々の推移 (表) | 同じドラフト本文 (直近 30 日分を表示、400 日分を保存) |
-| フィーバーチャートの図 (散布図 SVG) | 各実行結果の **Artifacts** (`fever-chart`、30 日保存) |
+| 日々の推移 (表) | 同じドラフト本文 (直近 30 日分を表示、約 1 年 (260 営業日) 分を保存。本文の上限を超える場合は古い分から削る) |
+| Status ごとの件数 (CFD の元データ) | 同じドラフト本文 (直近 10 日分を表示、上と同じ期間を保存) |
+| フィーバーチャート・CFD の図 (SVG) | 各実行結果の **Artifacts** (`fever-chart` の中の `fever-chart.svg` / `cfd.svg`、30 日保存) |
 
 リポジトリにはコミットしないので、ブランチ保護があっても動きます。
 

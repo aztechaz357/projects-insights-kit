@@ -36,7 +36,8 @@ DOTENV = Path.cwd() / ".env"
 STATE_METRIC = "Progress %"  # 設定と履歴はこのトラッカーの本文に保存
 CONFIG_RE = re.compile(r"```json\s*(\{.*?\})\s*```", re.S)
 HISTORY_RE = re.compile(r"<!-- insights-kit:history\s*(\[.*?\])\s*-->", re.S)
-MAX_HISTORY = 400
+MAX_HISTORY = 260  # 約 1 年分の営業日
+BODY_LIMIT = 60000  # ドラフト本文の上限は 65,536 文字。余裕を持たせる
 
 JST = dt.timezone(dt.timedelta(hours=9))
 PROJECT_URL_RE = re.compile(r"github\.com/(orgs|users)/([^/]+)/projects/(\d+)")
@@ -525,36 +526,45 @@ def parse_state(body: str, strict: bool) -> tuple[dict, list]:
 
 
 def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
+    """Insights のチャート設定表 (Markdown)。試験用 Project の実際の画面で確認した組み合わせだけを載せる:
+    X-axis が Time のチャートは Group by を選べず、系列は Open / Completed (Status が Done) に固定される。"""
     f = cfg["fields"]
     est, metric = f["estimate"], f["fever_metric"]
     excl = f"no:{slug(metric)}"
+    auto = "(選べない)"
     rows = [
-        ("バーンダウン (全体)", f"`{excl} -status:Done`", "Line", "Time", "None", f"Sum of {est}"),
-        ("バーンアップ", f"`{excl}`", "Stacked area", "Time", "Status", f"Sum of {est}"),
-        ("累積フロー図 (CFD)", f"`{excl} is:issue`", "Stacked area", "Time", "Status", "Count of items"),
-        ("フィーバー (推移)", f"`has:{slug(metric)}`", "Line", "Time", metric, f"Sum of {f['fever_value']}"),
+        ("バーンダウン (全体)", f"`{excl} -status:Done`", "Line", "Time", auto, f"Sum of {est}"),
+        ("バーンアップ", f"`{excl}`", "Stacked area", "Time", auto, f"Sum of {est}"),
+        ("進捗率の推移", f"`{slug(metric)}:{q('Progress %')}`", "Line", "Time", auto, f"Sum of {f['fever_value']}"),
+        ("バッファ消費率の推移", f"`{slug(metric)}:{q('Buffer %')}`", "Line", "Time", auto, f"Sum of {f['fever_value']}"),
         ("フィーバー (現在のゾーン)", f"`has:{slug(metric)}`", "Bar", f["fever_zone"], "None", "Count of items"),
+        ("Status 別の件数 (今)", f"`{excl} is:issue`", "Column", "Status", "None", "Count of items"),
     ]
     if "sprint" in cfg["cadence"]:
-        rows.insert(1, ("バーンダウン (今のスプリント)", f"`{excl} -status:Done {slug(f['sprint'])}:@current`", "Line", "Time", "None", f"Sum of {est}"))
+        rows.insert(1, ("バーンダウン (今のスプリント)", f"`{excl} -status:Done {slug(f['sprint'])}:@current`", "Line", "Time", auto, f"Sum of {est}"))
     if "phase" in cfg["cadence"]:
         rows.append(("工程別の残作業", f"`{excl} -status:Done`", "Stacked column", f["phase"], "Status", f"Sum of {est}"))
     rows += [
         ("担当者別の残作業", f"`{excl} -status:Done`", "Stacked column", "Assignees", "Status", f"Sum of {est}"),
-        ("自分のバーンダウン (見る人ごと)", f"`{excl} -status:Done assignee:@me`", "Line", "Time", "None", f"Sum of {est}"),
+        ("自分のバーンダウン (見る人ごと)", f"`{excl} -status:Done assignee:@me`", "Line", "Time", auto, f"Sum of {est}"),
+        ("注目 Issue 別の残作業", f"`{excl} -status:Done`", "Stacked column", "Parent issue", "Status", f"Sum of {est}"),
     ]
     for ref in cfg.get("focus_issues") or ["OWNER/REPO#番号"]:
-        rows.append((f"注目 {ref} のバーンダウン", f"`{excl} -status:Done parent-issue:{ref}`", "Line", "Time", "None", f"Sum of {est}"))
+        rows.append((f"注目 {ref} のバーンダウン", f"`{excl} -status:Done parent-issue:{ref}`", "Line", "Time", auto, f"Sum of {est}"))
     lines = ["## 📊 Insights の設定 (Project → Insights → New chart → Configure)", "",
              "| チャート | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |", "|---|---|---|---|---|---|"]
     lines += [f"| {' | '.join(r)} |" for r in rows]
-    lines += ["", "GitHub のドキュメントでは、Group by は X-axis が Time 以外のチャート向けとして説明されています。"
-              "Time を選んだあと Group by が選べない場合は、Group by を None にし、Filter に `status:Done` などを足したチャートに分けてください。"]
-    lines += ["", "### 累積フロー図 (CFD) の見方",
+    lines += ["",
+              "- X-axis を **Time** にしたチャートは Group by を選べず、線 (帯) は **Open** と **Completed** (Status が Done) の 2 つに自動で分かれます",
+              "- Y-axis で `Sum of …` を選ぶと、Count of items の代わりにフィールドの合計になります",
+              "",
+              "### 累積フロー図 (CFD)",
+              "Insights では Status ごとの帯を時系列に積み上げられないため、CFD はキットが描きます。",
+              "毎朝 Status ごとの件数を記録し、実行結果の **Artifacts** (`cfd.svg`) と「📈 Fever: 進捗率」の本文の表に出します。",
               "- 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら滞留しています",
               "- 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)",
-              "- Done の帯の **増え方** = 完了のペース。全体の高さ (全件数) が増え続けていたらスコープが増えています",
-              "- 帯は Status の選択肢ごとに分かれます。読みやすいよう、Project の Settings → Status で流れの順 "
+              "- 一番下の完了の帯の **増え方** = 完了のペース。全体の高さが増え続けていたらスコープが増えています",
+              "- 帯の並びは Project の Status の選択肢の順です。Settings → Status で流れの順 "
               "(例: Todo → In Progress → In Review → Done) に並べてください"]
     if statuses:
         lines += [f"- 今の Status の順: {' → '.join(statuses)}"]
@@ -563,8 +573,8 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
     lines += ["", "### 担当者ごと・注目 Issue ごとに見る",
               "- `assignee:@me` は **グラフを見ている人自身** に置き換わるので、1 枚で各自が自分の分を見られます。"
               "特定の人だけを見るときは `assignee:ユーザー名` (カンマ区切りで複数可) にします",
-              "- `parent-issue:OWNER/REPO#番号` は、その Issue の **サブ Issue** (直下の子) のうち、この Project に入っているものだけに絞ります。"
-              "注目 Issue ごとにチャートを 1 枚ずつ作ってください",
+              "- 「注目 Issue 別の残作業」は、X-axis の **Parent issue** で親 Issue ごとに 1 本の棒になります (親がないものは No Parent issue)",
+              "- `parent-issue:OWNER/REPO#番号` は、その Issue の **サブ Issue** (直下の子) のうち、この Project に入っているものだけに絞ります",
               "- 担当者別・注目 Issue 別の進捗の表は、毎朝の実行結果の Summary と「📈 Fever: 進捗率」の本文にも出ます"
               " (こちらは孫以下のサブ Issue も含めて集計します)"]
     if not cfg.get("focus_issues"):
@@ -723,23 +733,25 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
         b = max(0.0, elapsed - p * plan_days) / buffer_days
         row = {"date": today.isoformat(), "elapsed_days": elapsed, "done": round(done, 2), "total": round(total, 2),
                "unit": unit, "progress": round(p * 100, 1), "buffer": round(b * 100, 1), "buffer_days": buffer_days,
-               "zone": fever_zone(p, b, cfg["fever_zones"])}
+               "zone": fever_zone(p, b, cfg["fever_zones"]), "status": status_counts(work, f["status"], cfg["done_status"])}
         history = sorted([h for h in history if h["date"] != row["date"]] + [row], key=lambda h: h["date"])[-MAX_HISTORY:]
+    status_order = list(fields[f["status"]].get("options", {}))
     out.mkdir(parents=True, exist_ok=True)
     save(out / "fever-history.json", history)
     svg_fever_chart(out / "fever-chart.svg", history, cfg["fever_zones"], f"フィーバーチャート — {cfg['project']['title']}")
+    svg_cfd(out / "cfd.svg", history, status_order, cfg["done_status"], f"累積フロー図 (CFD) — {cfg['project']['title']}")
 
     # --- 3) トラッカー (ドラフト Issue) を更新。設定と履歴は「進捗率」側に保存
     if len(trackers) < len(METRICS):
         ensure_trackers(proj, f, fields, trackers)  # 作成したものは trackers に入る
     breakdown = breakdown_md(cfg, work, items, est, is_done)
-    visible = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing) + "\n\n" + breakdown
+    cfd_table = cfd_md(history, status_order, cfg["done_status"])
+    visible = (tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing)
+               + "\n\n" + breakdown + ("\n\n" + cfd_table if cfd_table else ""))
     stored_cfg = {k: v for k, v in cfg.items() if k != "project"}
     for metric, it in trackers.items():
         if metric == STATE_METRIC:
-            body = (f"{visible}\n\n### ⚙️ 設定 (編集できます。次回の実行から反映)\n\n```json\n"
-                    f"{json.dumps(stored_cfg, ensure_ascii=False, indent=2)}\n```\n\n"
-                    f"<!-- insights-kit:history\n{json.dumps(history, ensure_ascii=False, separators=(',', ':'))}\n-->")
+            body = state_body(visible, stored_cfg, history)
         else:
             body = f"{visible}\n\n設定と履歴は「📈 Fever: 進捗率」の本文にあります。"
         if it["values"].get(f["fever_metric"]) != metric:
@@ -765,8 +777,50 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
             f"| 納期 (バッファ込み) | {deadline} |\n"
             f"| PERT で見積を更新 | {updated} 件 |\n"
             f"| 見積が未入力 | {missing} 件 |\n\n"
-            "フィーバーチャートの図 (SVG) は、この実行結果の Artifacts からダウンロードできます。\n\n" + breakdown + "\n")
+            "フィーバーチャート (`fever-chart.svg`) と累積フロー図 (`cfd.svg`) は、この実行結果の Artifacts からダウンロードできます。\n\n"
+            + breakdown + ("\n\n" + cfd_table if cfd_table else "") + "\n")
     print(f"progress={row['progress']}% buffer={row['buffer']}% zone={zone} ({row['done']}/{row['total']} {unit}), estimates updated={updated}")
+
+
+def state_body(visible: str, stored_cfg: dict, history: list[dict]) -> str:
+    """「📈 Fever: 進捗率」の本文 (表示 + 設定 JSON + 履歴)。
+    ドラフト本文の上限 (65,536 文字) を超えないよう、超える分は古い履歴から削る (直近 30 日分は必ず残す)。"""
+    kept = history
+    while True:
+        body = (f"{visible}\n\n### ⚙️ 設定 (編集できます。次回の実行から反映)\n\n```json\n"
+                f"{json.dumps(stored_cfg, ensure_ascii=False, indent=2)}\n```\n\n"
+                f"<!-- insights-kit:history\n{json.dumps(kept, ensure_ascii=False, separators=(',', ':'))}\n-->")
+        if len(body) <= BODY_LIMIT or len(kept) <= 30:
+            return body
+        kept = kept[max(1, len(kept) // 10):]
+
+
+def status_counts(work: list[dict], status_field: str, done_status: list[str]) -> dict:
+    """CFD 用に、作業項目を Status ごとに数える。
+    進捗率の計算と合わせるため、Close 済みの Issue は Status にかかわらず完了 (done_status の先頭) として数える。"""
+    counts: dict[str, int] = {}
+    for it in work:
+        s = it["values"].get(status_field) or NO_STATUS
+        if it["content"].get("state") in ("CLOSED", "MERGED") and s not in done_status and done_status:
+            s = done_status[0]
+        counts[s] = counts.get(s, 0) + 1
+    return counts
+
+
+def cfd_md(history: list[dict], status_order: list[str], done_status: list[str], days: int = 10) -> str:
+    """CFD の元データ (直近の日付 × Status の件数) の表。"""
+    rows = [h for h in history if h.get("status")][-days:]
+    if not rows:
+        return ""
+    cols = list(reversed(cfd_bands(rows, status_order, done_status)))  # 表は流れの順 (Todo → … → Done)
+    lines = [f"### 📊 累積フロー図 (CFD) の元データ (直近 {len(rows)} 日・件数)", "",
+             "図は実行結果の Artifacts の `cfd.svg` にあります。", "",
+             "| 日付 | " + " | ".join(c.replace("|", "\\|") for c in cols) + " | 合計 |",
+             "|---|" + "---:|" * (len(cols) + 1)]
+    for h in rows:
+        st = h["status"]
+        lines.append(f"| {h['date']} | " + " | ".join(str(st.get(c, 0)) for c in cols) + f" | {sum(st.values())} |")
+    return "\n".join(lines)
 
 
 def tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing) -> str:
@@ -842,6 +896,72 @@ def svg_fever_chart(path: Path, history: list[dict], zones: dict, title: str) ->
                        f'fill="{color[h["zone"]]}" stroke="#fff" stroke-width="1.5"><title>{h["date"]}</title></circle>')
             if last or i % step == 0:
                 out.append(f'<text x="{x(h["progress"]) + 7:.1f}" y="{y(h["buffer"]) - 7:.1f}" fill="#24292f" font-size="11">{h["date"][5:]}</text>')
+    out.append("</svg>")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(out), encoding="utf-8")
+
+
+NO_STATUS = "No Status"
+CFD_COLORS = ["#2da44e", "#0969da", "#8250df", "#bf3989", "#bc4c00", "#4d2d00", "#1b7c83", "#6639ba", "#9a6700"]
+
+
+def cfd_bands(history: list[dict], status_order: list[str], done_status: list[str]) -> list[str]:
+    """CFD の帯の並び (下から上)。完了 → 流れの後ろの Status → … → 最初の Status → No Status → 記録にだけある Status。"""
+    seen = {k for h in history for k in (h.get("status") or {})}
+    done = [s for s in status_order if s in done_status] + [s for s in done_status if s not in status_order and s in seen]
+    rest = [s for s in reversed(status_order) if s not in done]
+    extra = sorted(s for s in seen if s not in done and s not in rest and s != NO_STATUS)
+    return done + rest + extra + ([NO_STATUS] if NO_STATUS in seen else [])
+
+
+def svg_cfd(path: Path, history: list[dict], status_order: list[str], done_status: list[str], title: str) -> None:
+    """累積フロー図 (Status ごとの件数を日付順に積み上げた面グラフ)。"""
+    rows = [h for h in history if h.get("status")]
+    bands = cfd_bands(rows, status_order, done_status)
+    W, H, L, R, T, B = 720, 480, 60, 170, 50, 60
+    pw, ph = W - L - R, H - T - B
+    ymax = max([1] + [sum(h["status"].values()) for h in rows])
+    ymax = int(math.ceil(ymax * 1.1))
+    n = len(rows)
+
+    def x(i):
+        return L + (pw * i / (n - 1) if n > 1 else pw / 2)
+
+    def y(v):
+        return T + ph * (1 - v / ymax)
+
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" font-family="sans-serif" font-size="12">',
+           f'<rect width="{W}" height="{H}" fill="#fff"/>',
+           f'<text x="{L}" y="30" font-size="16" font-weight="bold" fill="#24292f">{_esc(title)}</text>']
+    step_y = max(1, int(math.ceil(ymax / 8)))
+    for k in range(0, ymax + 1, step_y):
+        out.append(f'<line x1="{L}" x2="{L + pw}" y1="{y(k):.1f}" y2="{y(k):.1f}" stroke="#00000014"/>')
+        out.append(f'<text x="{L - 8}" y="{y(k) + 4:.1f}" text-anchor="end" fill="#57606a">{k}</text>')
+    if not rows:
+        out.append(f'<text x="{L + pw / 2}" y="{T + ph / 2}" text-anchor="middle" fill="#57606a">まだデータがありません</text>')
+    else:
+        base = [0.0] * n
+        for bi, band in enumerate(bands):
+            top = [base[i] + rows[i]["status"].get(band, 0) for i in range(n)]
+            color = "#afb8c1" if band == NO_STATUS else CFD_COLORS[bi % len(CFD_COLORS)]
+            if n == 1:  # 1 日分だけのときは棒で描く
+                out.append(f'<rect x="{x(0) - 20:.1f}" y="{y(top[0]):.1f}" width="40" height="{y(base[0]) - y(top[0]):.1f}" '
+                           f'fill="{color}" fill-opacity="0.85"><title>{_esc(band)}</title></rect>')
+            else:
+                upper = " ".join(f"{x(i):.1f},{y(top[i]):.1f}" for i in range(n))
+                lower = " ".join(f"{x(i):.1f},{y(base[i]):.1f}" for i in reversed(range(n)))
+                out.append(f'<polygon points="{upper} {lower}" fill="{color}" fill-opacity="0.85" stroke="#fff" stroke-width="0.5">'
+                           f'<title>{_esc(band)}</title></polygon>')
+            ly = T + 14 + 20 * (len(bands) - 1 - bi)  # 凡例は帯と同じ上下の並び
+            out.append(f'<rect x="{L + pw + 16}" y="{ly - 10}" width="12" height="12" fill="{color}"/>')
+            out.append(f'<text x="{L + pw + 34}" y="{ly}" fill="#24292f">{_esc(band)} ({rows[-1]["status"].get(band, 0)})</text>')
+            base = top
+        step = max(1, n // 8)
+        for i, h in enumerate(rows):
+            if i % step == 0 or i == n - 1:
+                out.append(f'<text x="{x(i):.1f}" y="{T + ph + 18}" text-anchor="middle" fill="#57606a">{h["date"][5:]}</text>')
+    out.append(f'<text x="18" y="{T + ph / 2}" transform="rotate(-90 18 {T + ph / 2})" text-anchor="middle" fill="#24292f">件数</text>')
+    out.append(f'<rect x="{L}" y="{T}" width="{pw}" height="{ph}" fill="none" stroke="#8c959f"/>')
     out.append("</svg>")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(out), encoding="utf-8")
