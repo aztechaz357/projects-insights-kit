@@ -591,10 +591,13 @@ class Project:
     def set_option(self, item_id: str, field: dict, option: str) -> None:
         self._set_value(item_id, field, f"singleSelectOptionId: {q(field['options'][option])}")
 
-    def create_draft(self, title: str, body: str) -> str:
+    def create_draft(self, title: str, body: str) -> dict:
+        """ドラフト Issue を作り、items() と同じ形の dict を返す (作成直後は items() に出ないことがあるため)。"""
         data = gql("mutation($p: ID!, $t: String!, $b: String!) { addProjectV2DraftIssue(input: {projectId: $p, title: $t, body: $b}) "
-                   "{ projectItem { id } } }", p=self.id, t=title, b=body)
-        return data["addProjectV2DraftIssue"]["projectItem"]["id"]
+                   "{ projectItem { id content { ... on DraftIssue { id } } } } }", p=self.id, t=title, b=body)
+        item = data["addProjectV2DraftIssue"]["projectItem"]
+        return {"id": item["id"], "type": "DRAFT_ISSUE", "values": {},
+                "content": {"id": item["content"]["id"], "title": title, "body": body}}
 
     def edit_draft(self, draft_id: str, body: str) -> None:
         gql("mutation($d: ID!, $b: String!) { updateProjectV2DraftIssue(input: {draftIssueId: $d, body: $b}) { draftIssue { id } } }",
@@ -686,7 +689,6 @@ def cmd_setup(a) -> None:
         "fever_zones": old.get("fever_zones", {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}),
         "buffer_auto": old.get("buffer_auto", {"k": 2.0, "fallback_ratio": 0.5}),
     }
-    ensure_trackers(proj, names, proj.fields(), trackers)
     summary(f"## ✅ セットアップ完了: [{info['title']}]({info['url']})\n\n"
             f"- 期間: {start} 〜 {planned_end} (バッファ: {buffer if buffer == 'auto' else f'{buffer} 営業日'})\n"
             f"- 進め方: {CADENCES[a.cadence]}\n"
@@ -701,17 +703,38 @@ def cmd_setup(a) -> None:
     run_daily(proj, cfg, history, today_jst(), Path(a.out))
 
 
+TRACKER_TITLE_RE = re.compile(r"^📈 Fever: .*\((Progress %|Buffer %)\)$")
+
+
+def tracker_metric(it: dict, metric_field: str) -> str | None:
+    """トラッカーのドラフトなら指標名を返す。作成直後は Fever Metric の値が API に反映されていないことがあるため、
+    タイトルでも判定する (判定できないと重複して作ってしまう)。"""
+    if it["type"] != "DRAFT_ISSUE":
+        return None
+    v = it["values"].get(metric_field)
+    if v in {m[0] for m in METRICS}:
+        return v
+    m = TRACKER_TITLE_RE.match(it["content"].get("title") or "")
+    return m.group(1) if m else None
+
+
 def find_trackers(items: list[dict], metric_field: str) -> dict:
-    names = {m[0] for m in METRICS}
-    return {it["values"][metric_field]: it for it in items
-            if it["type"] == "DRAFT_ISSUE" and it["values"].get(metric_field) in names}
+    out = {}
+    for it in items:
+        metric = tracker_metric(it, metric_field)
+        if metric and metric not in out:  # 同じ指標が複数あれば最初の 1 件を使う
+            out[metric] = it
+    return out
 
 
 def ensure_trackers(proj: Project, names: dict, fields: dict, trackers: dict) -> None:
+    """足りないトラッカーを作り、trackers に追加する (作り直した一覧を読み直さない)。"""
     for metric, _, label in METRICS:
         if metric not in trackers:
-            item_id = proj.create_draft(f"📈 Fever: {label} ({metric})", "Projects Insights Kit が自動更新します")
-            proj.set_option(item_id, fields[names["fever_metric"]], metric)
+            it = proj.create_draft(f"📈 Fever: {label} ({metric})", "Projects Insights Kit が自動更新します")
+            proj.set_option(it["id"], fields[names["fever_metric"]], metric)
+            it["values"][names["fever_metric"]] = metric
+            trackers[metric] = it
             print(f"  + tracker draft: {metric}")
 
 
@@ -890,7 +913,7 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
     work, updated = [], 0
     for it in items:
         v = it["values"]
-        if it["id"] in tracker_ids or it["type"] not in ("ISSUE", "DRAFT_ISSUE"):
+        if it["id"] in tracker_ids or tracker_metric(it, f["fever_metric"]) or it["type"] not in ("ISSUE", "DRAFT_ISSUE"):
             continue  # トラッカーと PR は集計しない
         if it["type"] == "ISSUE" and not it["content"].get("url"):
             continue  # 権限が無く中身が見えない Issue
@@ -940,8 +963,7 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
 
     # --- 3) トラッカー (ドラフト Issue) を更新。設定と履歴は「進捗率」側に保存
     if len(trackers) < len(METRICS):
-        ensure_trackers(proj, f, fields, trackers)
-        trackers = find_trackers(proj.items(), f["fever_metric"])
+        ensure_trackers(proj, f, fields, trackers)  # 作成したものは trackers に入る
     breakdown = breakdown_md(cfg, work, items, est, is_done)
     visible = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing) + "\n\n" + breakdown
     stored_cfg = {k: v for k, v in cfg.items() if k != "project"}
@@ -952,6 +974,8 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
                     f"<!-- insights-kit:history\n{json.dumps(history, ensure_ascii=False, separators=(',', ':'))}\n-->")
         else:
             body = f"{visible}\n\n設定と履歴は「📈 Fever: 進捗率」の本文にあります。"
+        if it["values"].get(f["fever_metric"]) != metric:
+            proj.set_option(it["id"], fields[f["fever_metric"]], metric)
         if row:
             value = row["progress"] if metric == "Progress %" else row["buffer"]
             if it["values"].get(f["fever_value"]) != value:
