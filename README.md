@@ -78,6 +78,7 @@ Projects は Actions 標準のトークンでは操作できないため、個�
 | 進め方 | `phase+sprint-2w` | 下の「進め方の選び方」参照 |
 | 既存の見積フィールド名 | `見積日数` | 人日の数値フィールドが既にあれば名前を入れる。空なら「見積 (人日)」を新規作成 |
 | 日本の祝日を除外 | ✅ | 営業日の計算から祝日を除く |
+| 注目 Issue | `acme/portal#12, acme/portal#30` | 進捗を個別に見たい親 Issue (サブ Issue を持つもの)。Issue の URL でも可。空なら前回のまま |
 
 終わると、実行結果の画面 (Summary) に **この Project 用の Insights 設定表** が出ます。
 期間や進め方を変えたいときは、同じように mode: setup で再実行します (既存のフィールドや履歴はそのまま)。
@@ -104,10 +105,30 @@ Project 右上の **Insights → New chart** で作り、**Filter** はグラフ
 | フィーバー (推移) | `has:fever-metric` | Line | Time | Fever Metric | Sum of Fever Value |
 | フィーバー (現在のゾーン) | `has:fever-metric` | Bar | Fever Zone | None | Count of items |
 | 工程別の残作業 | `no:fever-metric -status:Done` | Stacked column | Phase | Status | Sum of 見積 (人日) |
+| 担当者別の残作業 | `no:fever-metric -status:Done` | Stacked column | Assignees | Status | Sum of 見積 (人日) |
+| 自分のバーンダウン | `no:fever-metric -status:Done assignee:@me` | Line | Time | None | Sum of 見積 (人日) |
+| 注目 Issue のバーンダウン | `no:fever-metric -status:Done parent-issue:acme/portal#12` | Line | Time | None | Sum of 見積 (人日) |
 
 - `no:fever-metric` は、自動で作るドラフト Issue「📈 Fever: …」2 件を集計から外すためのものです
 - Insights の推移グラフは **実際の変更時刻** で記録されるため、線は導入した日から伸びていきます
-- Time を選ぶと Group by が選べない場合は、Filter に `status:Done` を足したチャートを別に作って並べてください
+- GitHub のドキュメントでは、Group by は X-axis が Time 以外のチャート向けとして説明されています。
+  Time を選ぶと Group by が選べない場合は、Group by を None にし、Filter に `status:Done` などを足したチャートを別に作って並べてください
+
+#### 担当者ごと・注目 Issue ごとに見る
+
+- **担当者ごと**
+  - 「担当者別の残作業」は、今の時点で誰に残作業がどれだけあるかを、Status ごとに積み上げて見せます
+  - 「自分のバーンダウン」の `assignee:@me` は **グラフを見ている人自身** に置き換わるので、1 枚作るだけで各自が自分の分を見られます
+  - 特定の人を見るときは `assignee:ユーザー名` (`assignee:alice,bob` で複数)、担当者がいないものは `no:assignee` です
+  - CFD やバーンアップの Filter に足せば、担当者ごとの CFD やバーンアップにもなります
+- **注目 Issue ごと**
+  - 注目 Issue は、サブ Issue (子 Issue) を持つ親 Issue のことです。Setup の「注目 Issue」に入れるか、設定 JSON の `focus_issues` に書きます
+  - `parent-issue:OWNER/REPO#番号` で、その Issue の **直下のサブ Issue** のうち、この Project に入っているものだけに絞れます。注目 Issue ごとにチャートを 1 枚ずつ作ってください。Setup の Summary には、設定した注目 Issue ごとの行が入った表が出ます
+  - 孫以下のサブ Issue は Insights のフィルタでは拾えません。代わりに次の進捗表で集計します
+- **毎朝の進捗表**: 毎朝の実行結果の Summary と、ドラフト「📈 Fever: 進捗率」の本文に、次の表が出ます。
+  - 担当者別 (件数・完了・残り見積・進捗)
+  - 注目 Issue 別 (サブ Issue を孫以下まで集計)
+  - それぞれの Insights の Filter に足す文字列も一緒に出るので、コピーしてチャートを作れます
 
 #### 累積フロー図 (CFD) を役立てるには
 
@@ -169,6 +190,7 @@ Project のドラフト「📈 Fever: 進捗率」を開き、本文の「⚙️
 | キー | 内容 |
 |---|---|
 | `done_status` | 完了とみなす Status 名 (例: `["Done", "Released"]`) |
+| `focus_issues` | 注目 Issue (例: `["acme/portal#12", "acme/portal#30"]`)。空の `[]` にすると注目 Issue 別の表を出さない |
 | `schedule.extra_holidays` | 会社独自の休日 (例: `["2026-12-29", "2026-12-30"]`) |
 | `fever_zones` | ゾーンの境界線 |
 | `buffer_auto.k` | 自動バッファの係数 (2.0 ≒ 95%、1.0 ≒ 68%) |

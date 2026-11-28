@@ -16,6 +16,7 @@
 
   python .github/insights-kit/insights_kit.py setup --project-url URL --planned-end-date YYYY-MM-DD [--start-date ...] [--buffer auto|N]
                                    [--cadence phase+sprint-2w] [--estimate-field 名前] [--no-japan-holidays]
+                                   [--focus-issues "acme/portal#12, acme/portal#30"]
   python .github/insights-kit/insights_kit.py daily --project-url URL [--date YYYY-MM-DD]
   python .github/insights-kit/insights_kit.py check-token
 """
@@ -267,9 +268,10 @@ query($id: ID!, $after: String) { node(id: $id) { ... on ProjectV2 {
     nodes { id type isArchived
       content {
         __typename
-        ... on Issue { number title state url }
+        ... on Issue { number title state url repository { nameWithOwner } assignees(first: 10) { nodes { login } }
+                       parent { number repository { nameWithOwner } } }
         ... on PullRequest { number title state url }
-        ... on DraftIssue { id title body }
+        ... on DraftIssue { id title body assignees(first: 10) { nodes { login } } }
       }
       fieldValues(first: 50) { nodes {
         __typename
@@ -447,6 +449,7 @@ def cmd_setup(a) -> None:
                      "extra_holidays": old.get("schedule", {}).get("extra_holidays", [])},
         "cadence": a.cadence,
         "fields": names,
+        "focus_issues": parse_focus_issues(a.focus_issues) if a.focus_issues.strip() else old.get("focus_issues", []),
         "done_status": old.get("done_status", ["Done"]),
         "fever_zones": old.get("fever_zones", {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}),
         "buffer_auto": old.get("buffer_auto", {"k": 2.0, "fallback_ratio": 0.5}),
@@ -513,10 +516,17 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
         rows.insert(1, ("バーンダウン (今のスプリント)", f"`{excl} -status:Done {slug(f['sprint'])}:@current`", "Line", "Time", "None", f"Sum of {est}"))
     if "phase" in cfg["cadence"]:
         rows.append(("工程別の残作業", f"`{excl} -status:Done`", "Stacked column", f["phase"], "Status", f"Sum of {est}"))
+    rows += [
+        ("担当者別の残作業", f"`{excl} -status:Done`", "Stacked column", "Assignees", "Status", f"Sum of {est}"),
+        ("自分のバーンダウン (見る人ごと)", f"`{excl} -status:Done assignee:@me`", "Line", "Time", "None", f"Sum of {est}"),
+    ]
+    for ref in cfg.get("focus_issues") or ["OWNER/REPO#番号"]:
+        rows.append((f"注目 {ref} のバーンダウン", f"`{excl} -status:Done parent-issue:{ref}`", "Line", "Time", "None", f"Sum of {est}"))
     lines = ["## 📊 Insights の設定 (Project → Insights → New chart → Configure)", "",
              "| チャート | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |", "|---|---|---|---|---|---|"]
     lines += [f"| {' | '.join(r)} |" for r in rows]
-    lines += ["", "Time を選んだあと Group by が選べない場合は、Filter に `status:Done` を足した別チャートなどに分けてください。"]
+    lines += ["", "GitHub のドキュメントでは、Group by は X-axis が Time 以外のチャート向けとして説明されています。"
+              "Time を選んだあと Group by が選べない場合は、Group by を None にし、Filter に `status:Done` などを足したチャートに分けてください。"]
     lines += ["", "### 累積フロー図 (CFD) の見方",
               "- 帯の **縦の幅** = その Status にいる件数 (仕掛かり量)。作業中の帯が太り続けていたら滞留しています",
               "- 帯の **横の幅** ≒ その Status を通り抜けるのにかかる時間 (リードタイム)",
@@ -527,6 +537,91 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
         lines += [f"- 今の Status の順: {' → '.join(statuses)}"]
         if len(statuses) < 3:
             lines += ["- ⚠️ 作業中を表す Status がありません。「In Progress」「In Review」などを追加すると、滞留が見えるようになります"]
+    lines += ["", "### 担当者ごと・注目 Issue ごとに見る",
+              "- `assignee:@me` は **グラフを見ている人自身** に置き換わるので、1 枚で各自が自分の分を見られます。"
+              "特定の人だけを見るときは `assignee:ユーザー名` (カンマ区切りで複数可) にします",
+              "- `parent-issue:OWNER/REPO#番号` は、その Issue の **サブ Issue** (直下の子) のうち、この Project に入っているものだけに絞ります。"
+              "注目 Issue ごとにチャートを 1 枚ずつ作ってください",
+              "- 担当者別・注目 Issue 別の進捗の表は、毎朝の実行結果の Summary と「📈 Fever: 進捗率」の本文にも出ます"
+              " (こちらは孫以下のサブ Issue も含めて集計します)"]
+    if not cfg.get("focus_issues"):
+        lines += ["- 注目 Issue を設定すると、上の表に Issue ごとの行が入ります (mode: setup の focus_issues、または設定 JSON の `focus_issues`)"]
+    return "\n".join(lines)
+
+
+def parse_focus_issues(text: str) -> list[str]:
+    """「acme/portal#12, https://github.com/acme/portal/issues/30」→ ["acme/portal#12", "acme/portal#30"]"""
+    out = []
+    for tok in re.split(r"[,\s、]+", text.strip()):
+        if not tok:
+            continue
+        m = (re.fullmatch(r"(?:https?://github\.com/)?([\w.-]+/[\w.-]+)(?:#|/issues/)(\d+)/?", tok))
+        if not m:
+            die(f"注目 Issue は owner/repo#番号 か Issue の URL で入力してください: '{tok}'")
+        ref = f"{m.group(1)}#{m.group(2)}"
+        if ref not in out:
+            out.append(ref)
+    return out
+
+
+def issue_ref(content: dict) -> str | None:
+    repo = (content.get("repository") or {}).get("nameWithOwner")
+    return f"{repo}#{content['number']}" if repo and content.get("number") else None
+
+
+def breakdown_md(cfg: dict, work: list[dict], all_items: list[dict], est, is_done) -> str:
+    """担当者別・注目 Issue 別の進捗表 (Markdown)。見積が 1 件も無いグループは件数で計算する。"""
+    def stats(group: list[dict]) -> str:
+        n, d = len(group), sum(1 for i in group if is_done(i))
+        e_all = [i for i in group if est(i)]
+        rest = round(sum(est(i) for i in e_all if not is_done(i)), 1)
+        if e_all:
+            total = sum(est(i) for i in e_all)
+            p = sum(est(i) for i in e_all if is_done(i)) / total * 100
+        else:
+            p = d / n * 100 if n else 0.0
+        return f"{n} | {d} | {rest} | {p:.0f}%"
+
+    head = "| {} | 件数 | 完了 | 残り見積 (人日) | 進捗 | Insights の Filter に足す |\n|---|---|---|---|---|---|"
+    lines = ["### 👤 担当者別", "", head.format("担当者")]
+    by_user: dict[str, list] = {}
+    for it in work:
+        logins = [a["login"] for a in ((it["content"].get("assignees") or {}).get("nodes") or [])]
+        for login in logins or [""]:
+            by_user.setdefault(login, []).append(it)
+    for login in sorted(by_user, key=lambda k: (k == "", k.lower())):
+        name, flt = (f"@{login}", f"`assignee:{login}`") if login else ("(未割り当て)", "`no:assignee`")
+        lines.append(f"| {name} | {stats(by_user[login])} | {flt} |")
+
+    focus = cfg.get("focus_issues") or []
+    if focus:
+        parent_of, titles = {}, {}
+        for it in all_items:
+            c = it["content"]
+            ref = issue_ref(c)
+            if ref:
+                titles[ref.lower()] = c.get("title", "")
+                if c.get("parent"):
+                    parent_of[ref.lower()] = issue_ref(c["parent"]).lower()
+
+        def under(ref: str, root: str) -> bool:
+            seen = set()
+            while ref in parent_of and ref not in seen:
+                seen.add(ref)
+                ref = parent_of[ref]
+                if ref == root:
+                    return True
+            return False
+
+        lines += ["", "### 🎯 注目 Issue 別 (サブ Issue を孫以下まで集計)", "", head.format("注目 Issue")]
+        for root in focus:
+            group = [i for i in work if (r := issue_ref(i["content"])) and under(r.lower(), root.lower())]
+            title = titles.get(root.lower(), "").replace("|", "\\|")
+            label = f"{root} {title}".strip()
+            if group:
+                lines.append(f"| {label} | {stats(group)} | `parent-issue:{root}` |")
+            else:
+                lines.append(f"| {label} | 0 | - | - | - | サブ Issue がこの Project にありません |")
     return "\n".join(lines)
 
 
@@ -615,7 +710,8 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
     if len(trackers) < len(METRICS):
         ensure_trackers(proj, f, fields, trackers)
         trackers = find_trackers(proj.items(), f["fever_metric"])
-    visible = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing)
+    breakdown = breakdown_md(cfg, work, items, est, is_done)
+    visible = tracker_body(cfg, history, plan_days, buffer_days, buffer_how, deadline, missing) + "\n\n" + breakdown
     stored_cfg = {k: v for k, v in cfg.items() if k != "project"}
     for metric, it in trackers.items():
         if metric == STATE_METRIC:
@@ -645,7 +741,7 @@ def run_daily(proj: Project, cfg: dict, history: list, today: dt.date, out: Path
             f"| 納期 (バッファ込み) | {deadline} |\n"
             f"| PERT で見積を更新 | {updated} 件 |\n"
             f"| 見積が未入力 | {missing} 件 |\n\n"
-            "フィーバーチャートの図 (SVG) は、この実行結果の Artifacts からダウンロードできます。\n")
+            "フィーバーチャートの図 (SVG) は、この実行結果の Artifacts からダウンロードできます。\n\n" + breakdown + "\n")
     print(f"progress={row['progress']}% buffer={row['buffer']}% zone={zone} ({row['done']}/{row['total']} {unit}), estimates updated={updated}")
 
 
@@ -759,6 +855,8 @@ def main() -> None:
     s.add_argument("--cadence", default="sprint-2w", choices=list(CADENCES))
     s.add_argument("--estimate-field", default="", help="既存の見積 (数値) フィールド名。空なら「見積 (人日)」を作成")
     s.add_argument("--no-japan-holidays", action="store_true")
+    s.add_argument("--focus-issues", default="",
+                   help="注目 Issue (owner/repo#番号 または Issue の URL をカンマ区切り)。空なら前回の設定のまま")
     s.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")
     s.set_defaults(fn=cmd_setup)
     d = sub.add_parser("daily", help="見積の再計算とフィーバー指標の更新")
