@@ -31,6 +31,8 @@ on:
         description: "[setup] 日本の祝日を除外する"
         type: boolean
         default: true
+      focus_issues:
+        description: "[setup] 注目 Issue (例: acme/portal#12, acme/portal#30。空=前回のまま)"
 
 permissions:
   contents: read
@@ -49,6 +51,7 @@ jobs:
       IN_CADENCE: ${{ inputs.cadence || 'phase+sprint-2w' }}
       IN_EST: ${{ inputs.estimate_field }}
       IN_JPH: ${{ github.event_name != 'workflow_dispatch' || inputs.japan_holidays }}
+      IN_FOCUS: ${{ inputs.focus_issues }}
     steps:
       - name: Check
         id: check
@@ -75,6 +78,7 @@ jobs:
             a=(--project-url "$PROJECT_URL" --planned-end-date "$IN_END" --buffer "$IN_BUFFER" --cadence "$IN_CADENCE")
             [ -n "$IN_START" ] && a+=(--start-date "$IN_START")
             [ -n "$IN_EST" ] && a+=(--estimate-field "$IN_EST")
+            [ -n "$IN_FOCUS" ] && a+=(--focus-issues "$IN_FOCUS")
             [ "$IN_JPH" = true ] || a+=(--no-japan-holidays)
             python3 "$KIT" setup "${a[@]}" --out out
           else
