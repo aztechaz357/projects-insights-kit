@@ -161,6 +161,25 @@ Insights では Status ごとの帯を時系列に積み上げられない (Time
 
 以上で完了です。以後は平日 09:00 (日本時間) に自動更新されます。
 
+## 図を見る場所
+
+図を見られる場所は 2 か所です。
+
+- **Project の Insights**: バーンアップ・バーンダウンと、フィーバーの推移グラフ
+- **Actions の実行結果の Summary**: 本来の形のフィーバーチャートと累積フロー図 (CFD)
+
+| 図 | 見る場所 | 開き方 |
+|---|---|---|
+| **バーンアップ** | Project の **Insights** | Project を開く → 右上の **Insights** → 左の一覧から「バーンアップ」(手順 5 で保存したチャート) |
+| **バーンダウン** | Project の **Insights** | 同じ一覧から「バーンダウン」 |
+| **フィーバーチャート** | Actions の実行結果の **Summary** | リポジトリの **Actions** → **Insights Kit** → 最新の実行 → 一番上の「📈 図を開く」→「フィーバーチャート」 |
+| **累積フロー図 (CFD)** | Actions の実行結果の **Summary** | 同じく「📈 図を開く」→「累積フロー図 (CFD)」 |
+
+- フィーバーチャート (横軸が進捗率) と CFD (Status ごとの帯の積み上げ) は Insights では描けないため、キットが図を描いて Actions 側に置いています。Project の画面の中では見られません
+- 同じ情報の簡易版・数字は、ほかの場所でも見られます
+  - **フィーバー**: Insights の「進捗率の推移」「バッファ消費率の推移」「現在のゾーン」、Summary の下の方の簡易版の折れ線、ドラフト「📈 Fever: 進捗率」の本文の表
+  - **CFD**: Summary の下の方の簡易版の線、ドラフト「📈 Fever: 進捗率」の本文の件数の表 (直近 10 日)
+
 ## どこに何が保存されるか
 
 | もの | 場所 |
@@ -279,6 +298,8 @@ fine-grained トークンの Projects 権限は、Project 単位では絞れま�
   `python .github/insights-kit/insights_kit.py daily --project-url <URL>` を実行します (gh CLI が必要)。
 
 ## このキットを保守する人向け
+
+全体の構造 (クラス図・シーケンス図・アクティビティ図) は [docs/design.md](docs/design.md) にまとめています。
 
 `insights-kit.yml` か `insights_kit.py` を変更したら、`python tools/sync_setup_html.py` で setup.html の埋め込みを更新し、
 `python -m unittest discover -s tests` で確認します (外部依存が入っていないこともテストします)。
