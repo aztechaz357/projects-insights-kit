@@ -18,6 +18,8 @@
                                    [--cadence phase+sprint-2w] [--estimate-field 名前] [--no-japan-holidays]
                                    [--focus-issues "acme/portal#12, acme/portal#30"]
   python .github/insights-kit/insights_kit.py daily --project-url URL [--date YYYY-MM-DD]
+  python .github/insights-kit/insights_kit.py template --template-url URL    (テンプレートの準備)
+  python .github/insights-kit/insights_kit.py create --template-url URL --title 名前 --planned-end-date YYYY-MM-DD [setup と同じ引数]
   python .github/insights-kit/insights_kit.py check-token
 """
 from __future__ import annotations
@@ -31,6 +33,7 @@ import re
 import urllib.parse
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 DOTENV = Path.cwd() / ".env"
@@ -288,7 +291,7 @@ class Project:
         self.owner, self.number, self.id = info["owner"], info["number"], info["id"]
 
     @staticmethod
-    def resolve(url: str) -> dict:
+    def resolve(url: str, required: bool = True) -> dict | None:
         m = PROJECT_URL_RE.search(url)
         if not m:
             die("Project の URL は https://github.com/orgs/<org>/projects/<番号> (個人は /users/) の形で入力してください")
@@ -299,6 +302,8 @@ class Project:
                    check=False, login=owner, n=number)
         p = ((data or {}).get(root) or {}).get("projectV2")
         if not p:
+            if not required:
+                return None
             die(f"Project {url} を開けませんでした。URL と、トークンの Projects 権限 (Resource owner) を確認してください")
         return {"url": p["url"], "owner": owner, "owner_type": "Organization" if kind == "orgs" else "User",
                 "number": number, "id": p["id"], "title": p["title"]}
@@ -375,7 +380,8 @@ class Project:
 
 
 # ==================================================================== setup
-def cmd_setup(a) -> None:
+def setup_inputs(a) -> tuple[dt.date, dt.date, str | float]:
+    """setup の入力 (開始日・計画完了日・バッファ・進め方) を確かめる。"""
     if a.cadence not in CADENCES:
         die(f"cadence は {', '.join(CADENCES)} のいずれか")
     start = parse_date(a.start_date, "開始日") if a.start_date else today_jst()
@@ -389,14 +395,63 @@ def cmd_setup(a) -> None:
             assert buffer > 0
         except (ValueError, AssertionError):
             die("バッファは auto か 正の数 (営業日) で入力してください")
+    return start, planned_end, buffer
 
+
+def cmd_setup(a) -> None:
+    start, planned_end, buffer = setup_inputs(a)
     info = Project.resolve(a.project_url)
     proj = Project(info)
     print(f"Project: {info['title']} ({info['url']})")
 
+    names = field_names(a.estimate_field)
+    created, kept = ensure_kit_fields(proj, names, a.cadence, start, planned_end, buffer)
+
+    # 既存の設定 (手で調整した値) と履歴を引き継ぐ
+    trackers = find_trackers(proj.items(), names["fever_metric"])
+    old, history = {}, []
+    if STATE_METRIC in trackers:
+        old, history = parse_state(trackers[STATE_METRIC]["content"].get("body") or "", strict=False)
+    cfg = {
+        "project": info,
+        "schedule": {"start_date": start.isoformat(), "planned_end_date": planned_end.isoformat(), "buffer": buffer,
+                     "japan_holidays": not a.no_japan_holidays,
+                     "extra_holidays": old.get("schedule", {}).get("extra_holidays", [])},
+        "cadence": a.cadence,
+        "fields": names,
+        "focus_issues": parse_focus_issues(a.focus_issues) if a.focus_issues.strip() else old.get("focus_issues", []),
+        "done_status": old.get("done_status", ["Done"]),
+        "fever_zones": old.get("fever_zones", {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}),
+        "buffer_auto": old.get("buffer_auto", {"k": 2.0, "fallback_ratio": 0.5}),
+    }
+    summary(f"## ✅ セットアップ完了: [{info['title']}]({info['url']})\n\n"
+            f"- 期間: {start} 〜 {planned_end} (バッファ: {buffer if buffer == 'auto' else f'{buffer} 営業日'})\n"
+            f"- 進め方: {CADENCES[a.cadence]}\n"
+            f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
+            f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n"
+            f"- 設定の保存先: Project 内のドラフト「📈 Fever: 進捗率」の本文 (JSON を編集すると次回から反映)\n")
+    fields = proj.fields()  # setup で作ったフィールドも含めて読み直す (チャートのリンクに ID が要る)
+    statuses = list(fields[names["status"]].get("options", {}))
+    if len(statuses) < 3:
+        warn(f"Status の選択肢が {statuses} だけのため、累積フロー図 (CFD) で作業中の滞留が見えません。"
+             "Project の Status に「In Progress」「In Review」などを追加してください")
+    if getattr(a, "from_template", False):
+        summary("テンプレートで保存したチャートは、この Project にコピー済みです (Insights の左の一覧)。"
+                "下の表は、テンプレートに入っていないチャート (スプリント・工程・注目 Issue ごとなど) を足すときに使います。\n")
+    summary(insights_recipe(cfg, statuses, fields))
+    run_daily(proj, cfg, history, today_jst(), Path(a.out))
+
+
+def field_names(estimate_field: str = "") -> dict:
     names = dict(DEFAULT_FIELDS)
-    if a.estimate_field:
-        names["estimate"] = a.estimate_field.strip()
+    if estimate_field and estimate_field.strip():
+        names["estimate"] = estimate_field.strip()
+    return names
+
+
+def ensure_kit_fields(proj: Project, names: dict, cadence: str, start: dt.date | None = None,
+                      planned_end: dt.date | None = None, buffer="auto") -> tuple[list, list]:
+    """キットが使うフィールドを、無ければ作る。cadence が none ならスプリント・工程は作らない (テンプレート用)。"""
     fields = proj.fields()
     created, kept = [], []
 
@@ -427,12 +482,12 @@ def cmd_setup(a) -> None:
         ensure_number(key)
     ensure_select("fever_metric", METRICS)
     ensure_select("fever_zone", ZONES)
-    if "phase" in a.cadence:
+    if "phase" in cadence:
         ensure_select("phase", [(p, c, "") for p, c in PHASES])
 
     # バッファ込みの納期までスプリントを用意 (auto は暫定で計画期間の 50%)
-    if "sprint" in a.cadence:
-        weeks = 1 if a.cadence.endswith("1w") else 2
+    if "sprint" in cadence:
+        weeks = 1 if cadence.endswith("1w") else 2
         span = (planned_end - start).days * (1.5 if buffer == "auto" else 1) + (0 if buffer == "auto" else buffer * 7 / 5)
         count = max(1, math.ceil(span / (7 * weeks)) + 1)
         if names["sprint"] in fields:
@@ -442,36 +497,107 @@ def cmd_setup(a) -> None:
         else:
             warn(f"Iteration フィールド「{names['sprint']}」を API で作成できませんでした。Project の Settings から手動で作成してください")
 
-    # 既存の設定 (手で調整した値) と履歴を引き継ぐ
-    trackers = find_trackers(proj.items(), names["fever_metric"])
-    old, history = {}, []
-    if STATE_METRIC in trackers:
-        old, history = parse_state(trackers[STATE_METRIC]["content"].get("body") or "", strict=False)
-    cfg = {
-        "project": info,
-        "schedule": {"start_date": start.isoformat(), "planned_end_date": planned_end.isoformat(), "buffer": buffer,
-                     "japan_holidays": not a.no_japan_holidays,
-                     "extra_holidays": old.get("schedule", {}).get("extra_holidays", [])},
-        "cadence": a.cadence,
-        "fields": names,
-        "focus_issues": parse_focus_issues(a.focus_issues) if a.focus_issues.strip() else old.get("focus_issues", []),
-        "done_status": old.get("done_status", ["Done"]),
-        "fever_zones": old.get("fever_zones", {"yellow": [0.10, 0.70], "red": [0.30, 0.90]}),
-        "buffer_auto": old.get("buffer_auto", {"k": 2.0, "fallback_ratio": 0.5}),
-    }
-    summary(f"## ✅ セットアップ完了: [{info['title']}]({info['url']})\n\n"
-            f"- 期間: {start} 〜 {planned_end} (バッファ: {buffer if buffer == 'auto' else f'{buffer} 営業日'})\n"
-            f"- 進め方: {CADENCES[a.cadence]}\n"
-            f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
-            f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n"
-            f"- 設定の保存先: Project 内のドラフト「📈 Fever: 進捗率」の本文 (JSON を編集すると次回から反映)\n")
-    fields = proj.fields()  # setup で作ったフィールドも含めて読み直す (チャートのリンクに ID が要る)
+    return created, kept
+
+
+# ==================================================================== template
+def cmd_template(a) -> None:
+    """テンプレート用の Project に、キットのフィールド (スプリント・工程を除く) を作り、チャートを保存するリンクを出す。"""
+    info = Project.resolve(a.template_url)
+    proj = Project(info)
+    print(f"Template: {info['title']} ({info['url']})")
+    names = field_names(a.estimate_field)
+    created, kept = ensure_kit_fields(proj, names, "none")
+    fields = proj.fields()
     statuses = list(fields[names["status"]].get("options", {}))
-    if len(statuses) < 3:
-        warn(f"Status の選択肢が {statuses} だけのため、累積フロー図 (CFD) で作業中の滞留が見えません。"
-             "Project の Status に「In Progress」「In Review」などを追加してください")
+    cfg = {"project": info, "cadence": "none", "fields": names, "focus_issues": []}
+    summary(f"## 🧩 テンプレートの準備: [{info['title']}]({info['url']})\n\n"
+            f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
+            f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n\n"
+            "**次にすること (最初の 1 回だけ)**\n\n"
+            "1. 下の表の「開く」を 1 つずつ開き、**⋯ → Save changes to new chart** で保存して、鉛筆のボタンで名前を付ける\n"
+            "2. Status の選択肢を流れの順 (例: Todo → In Progress → In Review → Done) にそろえる (新しい Project にもそのままコピーされます)\n"
+            "3. 以後は `mode: create` で、このテンプレートから新しい Project を作れます。保存したチャートとフィールドもコピーされます\n\n"
+            "スプリント・工程・注目 Issue のチャートは Project ごとに中身が違うため、テンプレートには入れません "
+            "(新しい Project を作ったときの Summary にリンクが出ます)。\n")
     summary(insights_recipe(cfg, statuses, fields))
-    run_daily(proj, cfg, history, today_jst(), Path(a.out))
+
+
+# ==================================================================== create
+def find_project_by_title(owner: str, owner_type: str, title: str) -> str | None:
+    root = "organization" if owner_type == "Organization" else "user"
+    data = gql(f"query($l: String!, $t: String!) {{ {root}(login: $l) {{ projectsV2(first: 50, query: $t) "
+               f"{{ nodes {{ title url closed }} }} }} }}", l=owner, t=title)
+    for p in (((data or {}).get(root) or {}).get("projectsV2") or {}).get("nodes") or []:
+        if p["title"] == title and not p["closed"]:
+            return p["url"]
+    return None
+
+
+def copy_project(template: dict, title: str) -> str:
+    """テンプレートの Project をコピーして新しい Project を作る。フィールド・ビュー・Insights のチャートがコピーされる
+    (試験用 Project で確認)。テンプレートのドラフト Issue はコピーしない。"""
+    root = "organization" if template["owner_type"] == "Organization" else "user"
+    owner_id = gql(f"query($l: String!) {{ {root}(login: $l) {{ id }} }}", l=template["owner"])[root]["id"]
+    res = gql("mutation($p: ID!, $o: ID!, $t: String!) { copyProjectV2(input: {projectId: $p, ownerId: $o, title: $t, "
+              "includeDraftIssues: false}) { projectV2 { url } } }", p=template["id"], o=owner_id, t=title)
+    return res["copyProjectV2"]["projectV2"]["url"]
+
+
+def wait_for_fields(proj: Project, expected: set, tries: int = 20, interval: float = 3.0) -> None:
+    """コピーの直後はフィールドが揃っていないことがあるため、テンプレートのフィールドが全部見えるまで待つ
+    (揃う前に setup すると、同じ名前のフィールドを作ってしまう)。"""
+    for _ in range(tries):
+        if expected <= set(proj.fields()):
+            return
+        time.sleep(interval)
+    warn("コピーした Project のフィールドが揃うのを待ちきれませんでした。足りないものは setup で作ります")
+
+
+def workflow_edit_url() -> str | None:
+    """Actions で動いているとき、このワークフローのファイルを編集する画面の URL。"""
+    repo, ref = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_REF_NAME")
+    if not repo or not ref:
+        return None
+    server = os.environ.get("GITHUB_SERVER_URL") or "https://github.com"
+    return f"{server}/{repo}/edit/{urllib.parse.quote(ref)}/.github/workflows/insights-kit.yml"
+
+
+def cmd_create(a) -> None:
+    """テンプレートをコピーして新しい Project を作り、続けて setup する。"""
+    title = a.title.strip()
+    if not title:
+        die("新しい Project の名前 (project_title) を入れてください")
+    setup_inputs(a)  # 入力の誤りで Project だけができてしまわないよう、コピーの前に確かめる
+    if a.focus_issues.strip():
+        parse_focus_issues(a.focus_issues)
+    template = Project.resolve(a.template_url)
+    existing = find_project_by_title(template["owner"], template["owner_type"], title)
+    if existing:
+        die(f"同じ名前の Project がすでにあります: {existing} 。別の名前にするか、"
+            "その Project を使うなら PROJECT_URL をその URL にして mode: setup で実行してください")
+    print(f"Template: {template['title']} ({template['url']})")
+    new_url = copy_project(template, title)
+    print(f"Created: {new_url}")
+    info = None
+    for _ in range(10):  # 作成直後は読めないことがある
+        info = Project.resolve(new_url, required=False)
+        if info:
+            break
+        time.sleep(3)
+    if not info:
+        die(f"作成した Project {new_url} を読めませんでした。少し待ってから、PROJECT_URL をこの URL にして mode: setup で実行してください")
+    wait_for_fields(Project(info), set(Project(template).fields()))
+    edit = workflow_edit_url()
+    summary(f"## 🆕 テンプレートから Project を作りました: [{title}]({new_url})\n\n"
+            f"- テンプレート: [{template['title']}]({template['url']})\n"
+            "- コピーしたもの: フィールド・ビュー・Insights のチャート (テンプレートの Issue とドラフトはコピーしません)\n\n"
+            "> **最後に 1 か所だけ書き換えてください**: 毎朝の自動更新をこの Project に向けるため、ワークフローの "
+            f"`PROJECT_URL` を `{new_url}` にします"
+            + (f" ([ワークフローを編集する]({edit}))" if edit else "") + "。\n")
+    a.project_url = new_url
+    a.from_template = True
+    cmd_setup(a)
 
 
 TRACKER_TITLE_RE = re.compile(r"^📈 Fever: .*\((Progress %|Buffer %)\)$")
@@ -1098,18 +1224,30 @@ def main() -> None:
     load_dotenv()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
+    def setup_args(s):
+        s.add_argument("--start-date", default="")
+        s.add_argument("--planned-end-date", required=True, help="バッファを含まない計画完了日")
+        s.add_argument("--buffer", default="auto", help="auto (PERT から自動) または営業日数")
+        s.add_argument("--cadence", default="sprint-2w", choices=list(CADENCES))
+        s.add_argument("--estimate-field", default="", help="既存の見積 (数値) フィールド名。空なら「見積 (人日)」を作成")
+        s.add_argument("--no-japan-holidays", action="store_true")
+        s.add_argument("--focus-issues", default="",
+                       help="注目 Issue (owner/repo#番号 または Issue の URL をカンマ区切り)。空なら前回の設定のまま")
+        s.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")
+
     s = sub.add_parser("setup", help="既存 Project にフィールドとトラッカーを追加")
     s.add_argument("--project-url", required=True)
-    s.add_argument("--start-date", default="")
-    s.add_argument("--planned-end-date", required=True, help="バッファを含まない計画完了日")
-    s.add_argument("--buffer", default="auto", help="auto (PERT から自動) または営業日数")
-    s.add_argument("--cadence", default="sprint-2w", choices=list(CADENCES))
-    s.add_argument("--estimate-field", default="", help="既存の見積 (数値) フィールド名。空なら「見積 (人日)」を作成")
-    s.add_argument("--no-japan-holidays", action="store_true")
-    s.add_argument("--focus-issues", default="",
-                   help="注目 Issue (owner/repo#番号 または Issue の URL をカンマ区切り)。空なら前回の設定のまま")
-    s.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")
+    setup_args(s)
     s.set_defaults(fn=cmd_setup)
+    c = sub.add_parser("create", help="テンプレートの Project をコピーして新しい Project を作り、setup する")
+    c.add_argument("--template-url", required=True)
+    c.add_argument("--title", required=True, help="新しい Project の名前")
+    setup_args(c)
+    c.set_defaults(fn=cmd_create)
+    t = sub.add_parser("template", help="テンプレート用の Project にフィールドを作り、チャートを保存するリンクを出す")
+    t.add_argument("--template-url", required=True)
+    t.add_argument("--estimate-field", default="")
+    t.set_defaults(fn=cmd_template)
     d = sub.add_parser("daily", help="見積の再計算とフィーバー指標の更新")
     d.add_argument("--project-url", default="", help="既定: 環境変数 PROJECT_URL")
     d.add_argument("--out", default="insights-kit-out", help="SVG / 履歴 JSON の出力先")

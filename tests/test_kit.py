@@ -160,5 +160,42 @@ class ChartLinkTest(unittest.TestCase):
         self.assertGreaterEqual(md.count("[開く](" + self.URL + "/insights?"), 9)
 
 
+class CreateTest(unittest.TestCase):
+    def args(self, **kw):
+        import argparse
+        base = dict(template_url="https://github.com/orgs/acme/projects/2", title="新プロジェクト", start_date="2026-12-01",
+                    planned_end_date="2027-03-31", buffer="auto", cadence="sprint-2w", estimate_field="",
+                    no_japan_holidays=False, focus_issues="", out="out")
+        base.update(kw)
+        return argparse.Namespace(**base)
+
+    def test_bad_input_stops_before_copying(self):
+        # 入力の誤りで Project だけができてしまわないよう、GitHub に触る前に止まること
+        orig = k.Project.resolve
+        k.Project.resolve = staticmethod(lambda *a, **kw: self.fail("コピーの前に止まっていない"))
+        try:
+            for kw in ({"planned_end_date": "2026-11-01"}, {"buffer": "abc"}, {"cadence": "x"},
+                       {"focus_issues": "not-an-issue"}, {"title": "  "}):
+                with self.subTest(kw=kw), self.assertRaises(SystemExit):
+                    k.cmd_create(self.args(**kw))
+        finally:
+            k.Project.resolve = orig
+
+    def test_workflow_edit_url(self):
+        import os
+        from unittest import mock
+        env = {"GITHUB_REPOSITORY": "acme/portal", "GITHUB_REF_NAME": "main", "GITHUB_SERVER_URL": "https://github.com"}
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(k.workflow_edit_url(),
+                             "https://github.com/acme/portal/edit/main/.github/workflows/insights-kit.yml")
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "", "GITHUB_REF_NAME": ""}):
+            self.assertIsNone(k.workflow_edit_url())
+
+    def test_workflow_offers_create_and_template(self):
+        wf = (ROOT / ".github" / "workflows" / "insights-kit.yml").read_text(encoding="utf-8")
+        self.assertIn("options: [daily, setup, create, template]", wf)
+        self.assertIn('TEMPLATE_URL: ""', wf)  # 配布時は空 (setup.html で書き込む)
+
+
 if __name__ == "__main__":
     unittest.main()
