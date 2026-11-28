@@ -260,6 +260,7 @@ import json
 import math
 import os
 import re
+import urllib.parse
 import subprocess
 import sys
 from pathlib import Path
@@ -488,7 +489,7 @@ FIELDS_QUERY = """
 query($id: ID!) { node(id: $id) { ... on ProjectV2 {
   fields(first: 100) { nodes {
     __typename
-    ... on ProjectV2FieldCommon { id name dataType }
+    ... on ProjectV2FieldCommon { id databaseId name dataType }
     ... on ProjectV2SingleSelectField { options { id name } }
     ... on ProjectV2IterationField { configuration {
       iterations { id title startDate duration } completedIterations { id title startDate duration } } }
@@ -539,7 +540,7 @@ class Project:
         for f in gql(FIELDS_QUERY, id=self.id)["node"]["fields"]["nodes"]:
             if "name" not in f:
                 continue
-            e = {"id": f["id"], "type": f.get("dataType")}
+            e = {"id": f["id"], "db": f.get("databaseId"), "type": f.get("dataType")}
             if "options" in f:
                 e["options"] = {o["name"]: o["id"] for o in f["options"]}
             if "configuration" in f:
@@ -696,11 +697,12 @@ def cmd_setup(a) -> None:
             f"- 追加したフィールド: {', '.join(created) or 'なし'}\n"
             f"- 既存を利用したフィールド: {', '.join(kept) or 'なし'}\n"
             f"- 設定の保存先: Project 内のドラフト「📈 Fever: 進捗率」の本文 (JSON を編集すると次回から反映)\n")
+    fields = proj.fields()  # setup で作ったフィールドも含めて読み直す (チャートのリンクに ID が要る)
     statuses = list(fields[names["status"]].get("options", {}))
     if len(statuses) < 3:
         warn(f"Status の選択肢が {statuses} だけのため、累積フロー図 (CFD) で作業中の滞留が見えません。"
              "Project の Status に「In Progress」「In Review」などを追加してください")
-    summary(insights_recipe(cfg, statuses))
+    summary(insights_recipe(cfg, statuses, fields))
     run_daily(proj, cfg, history, today_jst(), Path(a.out))
 
 
@@ -757,7 +759,7 @@ def parse_state(body: str, strict: bool) -> tuple[dict, list]:
     return cfg, history
 
 
-def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
+def insights_recipe(cfg: dict, statuses: list[str] | None = None, fields: dict | None = None) -> str:
     """Insights のチャート設定表 (Markdown)。試験用 Project の実際の画面で確認した組み合わせだけを載せる:
     X-axis が Time のチャートは Group by を選べず、系列は Open / Completed (Status が Done) に固定される。"""
     f = cfg["fields"]
@@ -783,9 +785,19 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
     ]
     for ref in cfg.get("focus_issues") or ["OWNER/REPO#番号"]:
         rows.append((f"注目 {ref} のバーンダウン", f"`{excl} -status:Done parent-issue:{ref}`", "Line", "Time", auto, f"Sum of {est}"))
-    lines = ["## 📊 Insights の設定 (Project → Insights → New chart → Configure)", "",
-             "| チャート | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |", "|---|---|---|---|---|---|"]
-    lines += [f"| {' | '.join(r)} |" for r in rows]
+    url = (cfg.get("project") or {}).get("url")
+    if fields and url:
+        links = [chart_link(url, r, fields, f["status"]) for r in rows]
+        lines = ["## 📊 Insights のチャート", "",
+                 "**作り方**: 「開く」のリンクを開く → 左の **Burn up** の横の **⋯** → **Save changes to new chart** → "
+                 "グラフ名の横の鉛筆で名前を付ける。手で作るときは、下の表のとおりに **New chart → Configure** で設定します。", "",
+                 "| チャート | 作成 | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |",
+                 "|---|---|---|---|---|---|---|"]
+        lines += [f"| {r[0]} | {f'[開く]({lk})' if lk else '-'} | {' | '.join(r[1:])} |" for r, lk in zip(rows, links)]
+    else:
+        lines = ["## 📊 Insights の設定 (Project → Insights → New chart → Configure)", "",
+                 "| チャート | Filter (グラフ上の入力欄) | Layout | X-axis | Group by | Y-axis |", "|---|---|---|---|---|---|"]
+        lines += [f"| {' | '.join(r)} |" for r in rows]
     lines += ["",
               "- X-axis を **Time** にしたチャートは Group by を選べず、線 (帯) は **Open** と **Completed** (Status が Done) の 2 つに自動で分かれます",
               "- Y-axis で `Sum of …` を選ぶと、Count of items の代わりにフィールドの合計になります",
@@ -812,6 +824,41 @@ def insights_recipe(cfg: dict, statuses: list[str] | None = None) -> str:
     if not cfg.get("focus_issues"):
         lines += ["- 注目 Issue を設定すると、上の表に Issue ごとの行が入ります (mode: setup の focus_issues、または設定 JSON の `focus_issues`)"]
     return "\n".join(lines)
+
+
+CHART_LAYOUTS = {"Line": "line", "Stacked area": "stacked-area", "Bar": "bar", "Column": "column",
+                 "Stacked column": "stacked-column", "Stacked bar": "stacked-bar"}
+
+
+def chart_link(project_url: str, row: tuple, fields: dict, status_field: str) -> str | None:
+    """設定済みのチャートを開く URL。Insights は設定を URL のクエリに持つので、既定の Burn up に設定を付けて開き、
+    「Save changes to new chart」で保存してもらう (試験用 Project の画面で確認した形式)。
+    使うフィールドが Project に無い・プレースホルダーの行は None。"""
+    _, flt, layout, x, group, y = row
+    flt = flt.strip("`")
+    if "OWNER/REPO" in flt or layout not in CHART_LAYOUTS:
+        return None
+
+    def db(name):
+        return (fields.get(name) or {}).get("db")
+
+    params = []
+    if x == "Time":
+        # Time のときも UI は Group by に Status の ID を入れる (無いと「設定が無効」になる)
+        if not db(status_field):
+            return None
+        params += [("xAxis[dataSource][column]", "time"), ("xAxis[groupBy]", str(db(status_field)))]
+    else:
+        if not db(x) or (group not in ("None", "") and not db(group)):
+            return None
+        params += [("xAxis[dataSource][column]", str(db(x))),
+                   ("xAxis[groupBy]", "" if group in ("None", "") else str(db(group)))]
+    if y.startswith("Sum of "):
+        if not db(y[len("Sum of "):]):
+            return None
+        params += [("yAxis[aggregate][operation]", "sum"), ("yAxis[aggregate][columns]", str(db(y[len("Sum of "):])))]
+    params += [("filterQuery", flt), ("layout", CHART_LAYOUTS[layout])]
+    return f"{project_url.rstrip('/')}/insights?{urllib.parse.urlencode(params)}"
 
 
 def parse_focus_issues(text: str) -> list[str]:
