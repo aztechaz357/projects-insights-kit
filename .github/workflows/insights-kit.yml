@@ -72,6 +72,8 @@ jobs:
         if: steps.check.outputs.ready
         run: |
           KIT=.github/insights-kit/insights_kit.py
+          # 図のリンクを Summary の先頭に置くため、キットの Summary はいったんファイルに書き、最後の手順で出す
+          export GITHUB_STEP_SUMMARY="$RUNNER_TEMP/kit-summary.md"
           python3 "$KIT" check-token
           if [ "$IN_MODE" = setup ]; then
             [ -n "$IN_END" ] || { echo "::error::setup には planned_end_date が必要です"; exit 1; }
@@ -91,3 +93,39 @@ jobs:
           name: fever-chart
           path: out/
           retention-days: 30
+
+      # 図を 1 枚ずつ zip にせずに置くと、リンクを開くだけでブラウザに表示される (ダウンロード不要)
+      - uses: actions/upload-artifact@v7
+        id: fever_svg
+        if: steps.check.outputs.ready && hashFiles('out/fever-chart.svg') != ''
+        with:
+          path: out/fever-chart.svg
+          archive: false
+          retention-days: 30
+
+      - uses: actions/upload-artifact@v7
+        id: cfd_svg
+        if: steps.check.outputs.ready && hashFiles('out/cfd.svg') != ''
+        with:
+          path: out/cfd.svg
+          archive: false
+          retention-days: 30
+
+      - name: Summary
+        if: always() && steps.check.outputs.ready
+        env:
+          FEVER_URL: ${{ steps.fever_svg.outputs.artifact-url }}
+          CFD_URL: ${{ steps.cfd_svg.outputs.artifact-url }}
+        run: |
+          {
+            if [ -n "$FEVER_URL$CFD_URL" ]; then
+              echo "## 📈 図を開く"
+              echo
+              if [ -n "$FEVER_URL" ]; then echo "- [フィーバーチャート]($FEVER_URL)"; fi
+              if [ -n "$CFD_URL" ]; then echo "- [累積フロー図 (CFD)]($CFD_URL)"; fi
+              echo
+              echo "リンクを開くとブラウザに図が表示されます (GitHub へのログインが必要。30 日間)。"
+              echo
+            fi
+            if [ -f "$RUNNER_TEMP/kit-summary.md" ]; then cat "$RUNNER_TEMP/kit-summary.md"; fi
+          } >> "$GITHUB_STEP_SUMMARY"
